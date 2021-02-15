@@ -1,0 +1,33 @@
+unit test1
+
+import stdio;
+
+constants {
+    ZERO = 0
+    HELLO = "Hello from r8";
+}
+
+variables {
+    a : uint8 := 0
+    b : int8 := 1
+    c : uint8
+    hello_str : string := "Z80";
+}
+
+extern {
+    function write(string)
+}
+
+function main() : uint8
+{
+  a := 1
+  // say hello
+  if a = 1 {
+    write("yes")
+  }
+  write(hello_str)
+  write(12)
+  write(a)
+  write(HELLO)
+}
+

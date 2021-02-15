@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/retro8
+retro8.so
+retro8.dylib
+retro8.dll
+retro8.a
+retro8.lib
+retro8-test-*
+*.exe
+*.o
+*.obj
+*.lst
