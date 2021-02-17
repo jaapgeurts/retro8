@@ -6,6 +6,7 @@ import std.variant;
 import std.random : uniform;
 import std.range;
 import std.algorithm;
+import std.algorithm.searching : count;
 
 import pegged.grammar;
 
@@ -89,7 +90,7 @@ Retro8:
                 
     FuncCall     <  Identifier '(' ArgList* ')'
 
-    ArgList      <  (Literal / Identifier) (',' (Literal / Identifier) )*
+    ArgList      <  Expression (',' Expression )*
 
     Comment      <- LineComment / BlockComment
     LineComment  <~ "//" ( !eol . )* eol
@@ -148,7 +149,7 @@ void main(string[] args) {
     // Parsing at compile-time:
     ParseTree parseTree1 = Retro8(input);
 
-    parseTree1 = simplifyTree(parseTree1);
+    //  parseTree1 = simplifyTree(parseTree1);
 
     // pragma(msg, parseTree1.matches);
     writeln(parseTree1);
@@ -165,11 +166,18 @@ void emitData() {
             switch (v.type) {
             case "uint8":
             case "int8":
-                writeln(v.identifier ~ ":\t\t.byte " ~ v.value ~ "\t\t; " ~ v.code);
+                if (v.identifier.length >= 8)
+                    writeln(v.identifier ~ ":\t.byte " ~ v.value ~ "\t\t; " ~ v.code);
+                else
+                    writeln(v.identifier ~ ":\t\t.byte " ~ v.value ~ "\t\t; " ~ v.code);
                 break;
             case "string":
-                writeln(v.identifier ~ ":\t\t.ascii " ~ to!string(
-                        v.value.length) ~ ",\"" ~ v.value ~ "\"\t\t; " ~ v.code);
+                if (v.identifier.length >= 8)
+                    writeln(v.identifier ~ ":\t.ascii " ~ to!string(
+                            v.value.length - v.value.count('\\') ) ~ ",\"" ~ v.value ~ "\"\t\t; " ~ v.code);
+                else
+                    writeln(v.identifier ~ ":\t\t.ascii " ~ to!string(
+                            v.value.length - v.value.count('\\')) ~ ",\"" ~ v.value ~ "\"\t\t; " ~ v.code);
                 break;
             default:
                 writeln("Unknown type: ", v);
@@ -224,39 +232,65 @@ void emitAssembly(ParseTree root, int level) {
     }
 }
 
+void emitStatement(ParseTree node) {
+    switch (node.name) {
+    case "Retro8.AssignmentStmt":
+        emitAssignmentStmt(node);
+        break;
+    case "Retro8.FuncCall":
+        emitFunctionCall(node);
+        break;
+    case "Retro8.IfStmt":
+        emitIfStatement(node);
+        break;
+    case "Retro8.WhileStmt":
+        emitWhileStatement(node);
+        break;
+    default:
+        // just descend
+        emitStatementList(node);
+        break;
+    }
+}
+
 void emitStatementList(ParseTree node) {
     foreach (child; node.children) {
-        switch (child.name) {
-        case "Retro8.AssignmentStmt":
-            emitAssignmentStmt(child);
-            break;
-        case "Retro8.FuncCall":
-            emitFunctionCall(child);
-            break;
-        case "Retro8.IfStmt":
-            emitIfStatement(child);
-            break;
-        default:
-            // just descend
-            emitStatementList(child);
-            break;
-        }
+        emitStatement(child);
     }
 }
 
 void emitIfStatement(ParseTree node) {
     ParseTree child = node.children[0];
-    immutable string label = genIdentifier();
+    immutable string label = "endif_" ~ genIdentifier();
     immutable string srctxt = "if " ~ strip(child.input[child.begin .. child.end]);
     emitExpression(child); // result ends up in register 'a'
     writeln("  cp   1\t\t; " ~ srctxt);
-    writeln("  jr   nz," ~ label); // TODO: depends on operator
-    emitStatementList(node.children[1]);
+    writeln("  jr   nz," ~ label);
+    if (node.children[1].name != "Retro8.StatementList")
+        emitStatement(node.children[1]);
+    else
+        emitStatementList(node.children[1]);
     writeln(label ~ ":");
-
 }
 
-void emitOperand(string register, ParseTree node) {
+void emitWhileStatement(ParseTree node) {
+    ParseTree child = node.children[0];
+    immutable string labelEnd = "wend_" ~ genIdentifier();
+    immutable string labelLoop = "while_" ~ genIdentifier();
+    immutable string srctxt = "while " ~ strip(child.input[child.begin .. child.end]);
+    writeln(labelLoop ~ ":");
+    emitExpression(child); // result ends up in register 'a'
+    writeln("  cp   1\t\t; " ~ srctxt);
+    writeln("  jr   nz," ~ labelEnd);
+    if (node.children[1].name != "Retro8.StatementList")
+        emitStatement(node.children[1]);
+    else
+        emitStatementList(node.children[1]);
+    writeln("  jp   " ~ labelLoop);
+    writeln(labelEnd ~ ":");
+}
+
+void emitOperand(ParseTree node) {
     string identlit = node.matches[0];
     switch (node.name) {
     case "Retro8.Identifier":
@@ -268,9 +302,9 @@ void emitOperand(string register, ParseTree node) {
             Symbol s = symboltable[identlit];
             if (s.kind == Kind.Constant) {
                 if (s.type == "string")
-                    writeln("  ld   " ~ register ~ "," ~ s.identifier);
+                    writeln("  ld   a," ~ s.identifier);
                 else
-                    writeln("  ld   " ~ register ~ "," ~ s.value);
+                    writeln("  ld   a," ~ s.value);
             }
             else if (s.kind == Kind.Variable) {
                 if (s.type == "string")
@@ -281,67 +315,81 @@ void emitOperand(string register, ParseTree node) {
         }
         break;
     case "Retro8.DecLit":
-        writeln("  ld   " ~ register ~ "," ~ identlit);
+        writeln("  ld   a," ~ identlit);
         break;
     case "Retro8.HexLit":
-        writeln("  ld   " ~ register ~ "," ~ identlit);
+        writeln("  ld   a," ~ identlit);
         break;
     case "Retro8.BoolLit":
-        writeln("  ld   " ~ register ~ "," ~ identlit == "true" ? "1" : "0");
+        writeln("  ld   a," ~ (identlit == "true" ? "1" : "0"));
         break;
     case "Retro8.BinLit":
-        writeln("  ld   " ~ register ~ "," ~ identlit);
+        writeln("  ld   a," ~ identlit);
         break;
     case "Retro8.OctLit":
-        writeln("  ld   " ~ register ~ "," ~ identlit);
+        writeln("  ld   a," ~ identlit);
+        break;
+    case "Retro8.StringLit":
+        // string literal found. put it constant list
+        string identifier = genIdentifier();
+        Symbol symbol = {Kind.Constant, identifier, "string", identlit, ""};
+        symboltable[identifier] = symbol;
+        writeln("  ld   hl," ~ identifier);
         break;
     default:
-        stderr.writeln(
-                "String literals not supported in expression: " ~ node.input[node.begin .. node.end]);
+        stderr.writeln("Unknown node: ", node.name);
+        stderr.writeln("String literals not supported in expression: ",
+                node.input[node.begin .. node.end]);
         break;
     }
 }
 
 void emitExpression(ParseTree node) {
-    string register;
 
-    // go to the bottom first. on the way back emit calculation
-    foreach (child; node.children) {
-        emitExpression(child);
+    if (node.children.length == 0) {
+        // we're at a leaf node (can only be: literal, or identifier)
+        emitOperand(node);
     }
-    if (node.name == "Retro8.SimpleExpression" || node.name == "Retro8.Term"
-            || node.name == "Retro8.Expression") {
+    else if (node.children.length == 1) {
+        // nothing do do here; descend further
+        emitExpression(node.children[0]);
+    }
+    else if (node.name == "Retro8.SimpleExpression"
+            || node.name == "Retro8.Term" || node.name == "Retro8.Expression") {
+        // nodes have three children, must be an operator
         ParseTree op1 = node.children[0];
         ParseTree op2 = node.children[2];
 
-        if (op2.name == "Retro8.SimpleExpression" || op2.name == "Retro8.Term") {
-            writeln("  ld   d,a\t\t; store expression result");
-        }
-        emitOperand("a", op1);
-        if (op2.name == "Retro8.SimpleExpression" || op2.name == "Retro8.Term") {
-            register = "d";
+        // check if we have to descend first
+        if (op1.name == "Retro8.SimpleExpression" || op1.name == "Retro8.Term"
+                || op1.name == "Retro8.Expression") {
+            emitExpression(op1);
+            writeln("  ld   c,a\t\t; store result from op1"); // move a to c
+            emitExpression(op2);
+            writeln("  ld   b,a\t\t; swap operands");
+            writeln("  ld   a,c");
         }
         else {
-            register = "b";
-            emitOperand("b", op2);
+            emitExpression(op2);
+            writeln("  ld   b,a\t\t; store result 3");
+            emitExpression(op1);
         }
+
         // emit operator
         switch (node.children[1].name) {
         case "Retro8.AddOp":
             switch (node.children[1].matches[0]) {
             case "+":
-                writeln("  add  " ~ register);
+                writeln("  add  b");
                 break;
             case "-":
-                writeln("  sub  " ~ register);
+                writeln("  sub  b");
                 break;
             default:
                 break;
             }
             break;
         case "Retro8.MulOp":
-            if (register == "d")
-                writeln("  ld   b,d");
             switch (node.children[1].matches[0]) {
             case "*":
                 writeln("  call mul");
@@ -357,7 +405,7 @@ void emitExpression(ParseTree node) {
             }
             break;
         case "Retro8.RelationOp":
-            writeln("  cp   " ~ register);
+            writeln("  cp   b");
             string lblFalse = genIdentifier();
             switch (node.children[1].matches[0]) {
             case "=":
@@ -393,71 +441,17 @@ void emitExpression(ParseTree node) {
         default:
             break;
         }
-    }
-    return;
 
-}
-
-void emitIdentLiteral(ParseTree node) {
-    string identlit = node.matches[0];
-    switch (node.name) {
-    case "Retro8.Identifier":
-        // variable or constant
-        if (identlit !in symboltable) {
-            stderr.writeln("Unknown identifier near: " ~ node.input[node.begin .. node.end]);
-        }
-        else {
-            Symbol s = symboltable[identlit];
-            if (s.kind == Kind.Constant) {
-                if (s.type == "string")
-                    writeln("  ld   a," ~ s.identifier);
-                else
-                    writeln("  ld   a," ~ s.value);
-            }
-            else if (s.kind == Kind.Variable) {
-                if (s.type == "string")
-                    writeln("  ld   a," ~ identlit);
-                else
-                    writeln("  ld   a,(" ~ identlit ~ ")");
-            }
-        }
-        break;
-    case "Retro8.DecLit":
-        writeln("  ld   a," ~ identlit);
-        break;
-    case "Retro8.HexLit":
-        writeln("  ld   a," ~ identlit);
-        break;
-    case "Retro8.BoolLit":
-        writeln("  ld   a," ~ identlit);
-        break;
-    case "Retro8.BinLit":
-        writeln("  ld   a," ~ identlit);
-        break;
-    case "Retro8.OctLit":
-        writeln("  ld   a," ~ identlit);
-        break;
-    case "Retro8.StringLit":
-        // string literal found. put it constant list
-        string identifier = genIdentifier();
-        Symbol symbol = {Kind.Constant, identifier, "string", identlit, ""};
-        symboltable[identifier] = symbol;
-        writeln("  ld   hl," ~ identifier);
-        break;
-    default:
-        break;
+        return;
     }
 }
 
 void emitFunctionCall(ParseTree node) {
     //foreach argument in the list
-    if (node.children[1].name == "Retro8.ArgList") {
+    if (node.children.length > 1) {
         foreach (arg; node.children[1].children) {
-            emitIdentLiteral(arg);
+            emitExpression(arg);
         }
-    }
-    else {
-        emitIdentLiteral(node.children[1]);
     }
     writeln("  call " ~ node.children[0].matches[0] ~ "\t\t; " ~ strip(
             node.input[node.begin .. node.end]));

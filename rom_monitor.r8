@@ -1,0 +1,44 @@
+unit rom_monitor
+
+constants {
+}
+
+variables {
+    buf : char[255]
+
+}
+
+extern {
+    function initSerial()
+    function initTimer()
+    function printk(string)
+    function write(string)
+    function readLine()
+    function strcmp(string a, string b)
+}
+
+function main() {
+    
+    // Setup the timer
+    initTimer()
+
+    // First initialize the serial port
+    initSerial()
+
+    printk("Z80 ROM Monitor v0.1\r\n")
+    printk("Written in r8");
+    printk("(C) January 2021 Jaap Geurts\r\n");
+
+    while(true) {
+        // show prompt
+        printk("> ")
+
+        readLine()
+
+        if (strcmp(buf,"help") = 0) {
+            printk("Commands: help, halt, load, dump, run\r\n")
+        }
+
+    }
+
+}

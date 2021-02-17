@@ -4,6 +4,8 @@ import stdio;
 
 variables {
     c : uint8
+    a : uint8
+    b: uint8
 }
 
 function a() {
