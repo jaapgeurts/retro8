@@ -1,0 +1,54 @@
+module bootstrap
+
+// author: jaapg
+
+
+/*
+a : int8 := 10
+
+
+func main()
+{
+  a := a + 1;
+}
+*/
+a : int8 := 10
+b : int8 := 5
+/* more comment */
+c : uint8 := 3
+
+func main()
+{
+}
+
+func getchar() : char
+{
+}
+
+func assignment() : char
+{
+  a := 7
+}
+
+func fargs(uint8 x)
+{
+}
+func fargs2(uint8 x, char y)
+{
+}
+
+func f3() {
+  while true {
+  }
+}
+
+func f4()
+{
+  if false {
+  }
+}
+
+func f4() {
+  if false {
+  }
+}

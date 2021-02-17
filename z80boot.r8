@@ -25,9 +25,19 @@ function main() : uint8
   if a = 1 {
     write("yes")
   }
+
+  b := 1
+  while b<10 {
+      write(b)
+      b := b+1
+  }
+
+  c := 5 + 2 * ( 8 - 2 )
+
   write(hello_str)
   write(12)
   write(a)
   write(HELLO)
+  write(09,c,ZERO);
 }
 
