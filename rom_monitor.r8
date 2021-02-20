@@ -4,17 +4,30 @@ constants {
 }
 
 variables {
-    buf : char[255]
-
+    buf : ubyte[]
+    a: ubyte
+    b: ubyte := 5
 }
 
 extern {
     function initSerial()
     function initTimer()
-    function printk(string)
-    function write(string)
+    function printk(HL!ubyte[])
+    function write(HL!ubyte[])
     function readLine()
-    function strcmp(string a, string b)
+}
+
+function strcmp(HL!ubyte[] a, DE!ubyte[] b) : A!bool {
+    #BC := [a]
+    while #BC > 0 {
+        if [a] != [b] {
+          return false
+        }
+        a++
+        b++
+        #BC--
+    }
+    return true
 }
 
 function main() {
@@ -27,15 +40,17 @@ function main() {
 
     printk("Z80 ROM Monitor v0.1\r\n")
     printk("Written in r8");
-    printk("(C) January 2021 Jaap Geurts\r\n");
+    printk("(C) Jan-Feb 2021 Jaap Geurts\r\n");
 
-    while(true) {
+    while true {
         // show prompt
         printk("> ")
 
-        readLine()
+        #B := readLine()
 
-        if (strcmp(buf,"help") = 0) {
+        //a := strcmp(buf,"help")
+
+        if strcmp(buf,"help") = 0 {
             printk("Commands: help, halt, load, dump, run\r\n")
         }
 

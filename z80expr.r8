@@ -3,20 +3,22 @@ unit z80expr
 import stdio;
 
 variables {
-    c : uint8
-    a : uint8
-    b: uint8
+    c : ubyte
+    a : ubyte
+    b: ubyte
+    d: ubyte
 }
 
 function a() {
-    c := 1
-    c := 1 + 2
-    c := 1 + 2 * 3
-    c := 1 * 3 + 2
-    c := 1 + 2 > 5
+    d := a
+    d := a + b
+    d := a + b * c
+    d := a * b + c
+    d := a + b > c
 
-    c := 1 + a
+/*    c := 1 + a
     c := 1 + a * 3
     c := 1 * 3 + a
     c := 1 + 2 > b
+    */
 }
