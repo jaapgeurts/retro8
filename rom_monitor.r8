@@ -4,28 +4,154 @@ constants {
 }
 
 variables {
-    buf : ubyte[]
+    buf : ubyte[255]
     a: ubyte
     b: ubyte := 5
 }
 
 extern {
-    function initSerial()
-    function initTimer()
-    function printk(HL!ubyte[])
-    function write(HL!ubyte[])
-    function readLine()
 }
 
+function initTimer() {
+    asm {
+; Crystal is 3,686,400 MHz
+; set up CTC  - 4800 baud is max achievable with 1MHz
+  ld a, 0b00000101 ; control register, prescaler to 16, timer mode
+  out (CTC_A), a
+;  ld a, 26; time constant for 2400 baud, 0.16% error
+;  ld a, 13; time constant for 4800 baud, 0.16% error
+  ; baudrates - Time constant
+  ; 115200    - 2
+  ; 57600     - 4
+  ; 19200     - 12
+  ; 9600      - 24
+  ld a, 1
+  out (CTC_A), a
+    }
+}
+
+function initSerial() {
+    asm {
+        ; reset channel 0
+  ld	a, 0b00110000
+  out (SIO_AC), a
+
+; prepare for writing WR4
+  ld	a, 0b00000100 ; write to WR1. Next byte is WR4
+  out	(SIO_AC), a
+  ld	a, 0b00000100               ; set clock rate, No parity, 1 stopbit
+  out	(SIO_AC), a
+
+; enable receive (WR3)
+  ld	a, 0b00000011
+  out	(SIO_AC), a
+  ld	a, 0b11000001             ; recv enable; 8bits / char
+  out	(SIO_AC), a
+
+; write register 5
+  ld	a, 0b00000101
+  out	(SIO_AC), a
+  ld	a, 0b01101000            ; send enable
+  out	(SIO_AC), a
+    }
+}
+
+function waitSerial() {
+    asm {
+
+  ; wait for serial port to be free
+  ld	a, 0b00000000 ; write to WR1. Next byte is RR0
+  out	(SIO_AC), a
+wait_serial_again:
+  in a, (SIO_AC)
+  bit 2,a
+  jr  z, wait_serial_again
+
+    }
+}
+
+function readLine() {
+    asm {
+    ; result in input_buf
+  ld de, v_buf+1
+  ld b,0
+read_line_again:
+  call getChar     ; get character
+  jr   z, read_line_again  ; nothing read: read again else result in a
+
+  cp a, CR   ; if (a ==  '\r') CR
+  jr z,read_line_end ;
+  cp a, LF   ; if (a ==  '\n') LF
+  jr z,read_line_end;
+  ; not any of the above so print and store
+  call putChar
+  cp a, BS ;  if (a == '\h') BS
+  jr nz, read_line_next
+  ld a,' '
+  call putChar
+  ld a,BS
+  call putChar
+  jr   read_line_again
+read_line_next:
+  ld (de), a    ; input_buf[b] = a
+  inc de  ; next char
+  inc b  ; increase counter
+  ; TODO: check for buffer overruns
+  jr   read_line_again
+read_line_end:
+  ld a,b
+  ld (v_buf), a ; input_buf[0] = b
+    }
+}
+
+function putChar(A!ubyte c) {
+    asm {
+; put comment here in order to prevent swallowing whitespace
+  push af
+  call waitSerial  ; make sure we can send
+  pop  af
+  out  (SIO_AD), a
+    }
+}
+
+function getChar() : A!ubyte {
+    asm {
+  ; check if character available
+  ld   a, 0b00000000 ; write to WR1. Next byte is RR0
+  out  (SIO_AC), a
+  in   a,(SIO_AC)
+  bit  0, a
+  ret  z  ; no char available
+; if yes, then read and return in a
+  in   a,(SIO_AD)
+    }
+}
+
+function printk(HL!ubyte[] m) {
+    asm {
+  ; print kernel message to serial (uses pascal strings)
+  push hl
+  ld   b,(hl)
+printk_loop:
+  call waitSerial
+  inc  hl
+  ld   a, (hl)
+  out  (SIO_AD), a
+  djnz printk_loop
+  pop  hl
+    }
+}
+
+
 function strcmp(HL!ubyte[] a, DE!ubyte[] b) : A!bool {
-    #BC := [a]
-    while #BC > 0 {
+    #A := 0
+    while #A > 0 {
         if [a] != [b] {
           return false
         }
         a++
         b++
-        #BC--
+        #A--
     }
     return true
 }
@@ -45,10 +171,7 @@ function main() {
     while true {
         // show prompt
         printk("> ")
-
-        #B := readLine()
-
-        //a := strcmp(buf,"help")
+        readLine() // result in buf
 
         if strcmp(buf,"help") = 0 {
             printk("Commands: help, halt, load, dump, run\r\n")
