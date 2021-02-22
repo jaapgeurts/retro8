@@ -1,6 +1,14 @@
 unit rom_monitor
 
 constants {
+    CTC_A  = 0x00
+  // SIO_AD = 0x40
+    SIO_BD = 0x41
+  //  SIO_AC = 0x42
+    SIO_BC = 0x43
+
+    SIO_AC = 0x80
+    SIO_AD = 0x81
 }
 
 variables {
@@ -10,48 +18,37 @@ variables {
 extern {
 }
 
+
 function initTimer() {
-    asm {
-; Crystal is 3,686,400 MHz
-; set up CTC  - 4800 baud is max achievable with 1MHz
-  ld a, 0b00000101 ; control register, prescaler to 16, timer mode
-  out (CTC_A), a
-;  ld a, 26; time constant for 2400 baud, 0.16% error
-;  ld a, 13; time constant for 4800 baud, 0.16% error
-  ; baudrates - Time constant
-  ; 115200    - 2
-  ; 57600     - 4
-  ; 19200     - 12
-  ; 9600      - 24
-  ld a, 1
-  out (CTC_A), a
-    }
+
+/* Crystal is 3,686,400 MHz
+  set up CTC  - 4800 baud is max achievable with 1MHz
+  Time constants at 1MHz:
+  26; time constant for 2400 baud, 0.16% error
+  13; time constant for 4800 baud, 0.16% error
+   baudrates - Time constant
+   @3.686MHZ
+  115200    - 2
+  57600     - 4
+  19200     - 12
+  9600      - 24
+*/
+    #CTC_A := 0b00000101
+    #CTC_A := 1
 }
 
 function initSerial() {
-    asm {
-        ; reset channel 0
-  ld	a, 0b00110000
-  out (SIO_AC), a
+    // reset channel 0
+    #SIO_AC := 0b00110000
 
-; prepare for writing WR4
-  ld	a, 0b00000100 ; write to WR1. Next byte is WR4
-  out	(SIO_AC), a
-  ld	a, 0b00000100               ; set clock rate, No parity, 1 stopbit
-  out	(SIO_AC), a
+    #SIO_AC := 0b00000100 // set clock rate, No parity, 1 stopbit
+    #SIO_AC := 0b00000100 
 
-; enable receive (WR3)
-  ld	a, 0b00000011
-  out	(SIO_AC), a
-  ld	a, 0b11000001             ; recv enable; 8bits / char
-  out	(SIO_AC), a
+    #SIO_AC := 0b00000011 // enable receiver (WR3)
+    #SIO_AC := 0b11000001 // recv enable; 8bits / char
 
-; write register 5
-  ld	a, 0b00000101
-  out	(SIO_AC), a
-  ld	a, 0b01101000            ; send enable
-  out	(SIO_AC), a
-    }
+    #SIO_AC := 0b00000101 //
+    #SIO_AC := 0b01101000 // send enable
 }
 
 function waitSerial() {
@@ -61,9 +58,9 @@ function waitSerial() {
   ld	a, 0b00000000 ; write to WR1. Next byte is RR0
   out	(SIO_AC), a
 wait_serial_again:
-  in a, (SIO_AC)
-  bit 2,a
-  jr  z, wait_serial_again
+  in    a, (SIO_AC)
+  bit   2,a
+  jr    z, wait_serial_again
 
     }
 }
@@ -124,40 +121,6 @@ function readLine() {
             buffer++;
         }
     }
-/*
-
-    asm {
-; result in input_buf
-  ld de, v_buf+1
-  ld b,0
-read_line_again:
-  call getChar     ; get character
-  jr   z, read_line_again  ; nothing read: read again else result in a
-
-  cp a, CR   ; if (a ==  '\r') CR
-  jr z,read_line_end ;
-  cp a, LF   ; if (a ==  '\n') LF
-  jr z,read_line_end;
-  ; not any of the above so print and store
-  call putChar
-  cp a, BS ;  if (a == '\h') BS
-  jr nz, read_line_next
-  ld a,' '
-  call putChar
-  ld a,BS
-  call putChar
-  jr   read_line_again
-read_line_next:
-  ld (de), a    ; input_buf[b] = a
-  inc de  ; next char
-  inc b  ; increase counter
-  ; TODO: check for buffer overruns
-  jr   read_line_again
-read_line_end:
-  ld a,b
-  ld (v_buf), a ; input_buf[0] = b
-    }
-    */
 }
 
 function printk(m : HL!ubyte[]) {
@@ -178,7 +141,7 @@ printk_loop:
 
 function strcmp(s1 : HL!ubyte[], s2 : DE!ubyte[]) : A!bool {
     b : C!ubyte
-    
+
     b := [s1]
     while b >= 0 {
         if [s1] != [s2] {

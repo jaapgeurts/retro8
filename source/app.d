@@ -41,11 +41,11 @@ Retro8:
 
     #RegType      < Register '!' Type # add this
 
-    Literal      <-  DecLit / BinLit / OctLit / HexLit / BoolLit / CharLit / StringLit
+    Literal      <-  HexLit /  BinLit / OctLit / DecLit / BoolLit / CharLit / StringLit
     DecLit       <~ [0-9]+
-    BinLit       <~ '0b' [0-1]+
-    OctLit       <~ '0o' [0-7]+
-    HexLit       <~ '0x' ([0-9A-F][0-9A-F])+
+    BinLit       <~ "0b" [0-1]+
+    OctLit       <~ "0o" [0-7]+
+    HexLit       <~ "0x" ( [0-9A-Fa-f] [0-9A-Fa-f] )+
     BoolLit      <- "true" / "false" 
     CharLit      <~ :quote (!quote ((backslash [bnrt]) / .)) :quote
     StringLit    <- :doublequote ~((!(doublequote / eol)  .)*) :doublequote
@@ -77,7 +77,7 @@ Retro8:
                      / FuncCall
                      / AsmStmt
 
-    AssignmentStmt   <  (Identifier / IndirectAccess) ':=' Expression
+    AssignmentStmt   <  (Identifier / IndirectAccess / Port) ':=' Expression
     ReturnStmt       < "return" Expression?
     BreakStmt        < "break"
     
@@ -98,12 +98,15 @@ Retro8:
 
     Factor        <  Literal
                     / FuncCall
+                    / Port
                     / Identifier
                     / IndirectAccess
                     / '(' Expression ')'
                     / "null"
 
     IndirectAccess   < '[' (Identifier / Literal) ']'
+
+    Port             < '#' (Identifier /Literal)
     
     Register         <- "AF" / "BC" / "DE" / "HL" / "IX" / "IY" / [ABCDEFHL]
     
@@ -519,7 +522,7 @@ void emitIfStatement(ParseTree node) {
 
 }
 
-void emitBreakStatement(ParseTree node){
+void emitBreakStatement(ParseTree node) {
     writeln("  break ; TODO BREAK NOT IMPLEMENTED");
 }
 
@@ -674,6 +677,23 @@ Type emitIdentifier(ParseTree node) {
 
 }
 
+Type emitPortRead(ParseTree node) {
+    // resolve the symbol if it's an identifier
+    string port;
+    if (node.children[0].name == "Retro8.Identifier") {
+        Symbol s = getSymbolForIdentifier(node.children[0]);
+        if (s.kind == Kind.Constant) {
+            port = s.value;
+        }
+        else if (s.kind == Kind.Variable) {
+            writeln("  ld   c,(", s.name, ")");
+        }
+    }
+    string srctext = strip(node.input[node.begin .. node.end]);
+    writeln("  in   a,(", port, ")\t\t; ", srctext);
+    return Type.Byte;
+}
+
 Type emitRegister(ParseTree node) {
     string register = node.matches[0].toLower();
     if (register[0] != 'a')
@@ -793,6 +813,8 @@ Type emitExpression(ParseTree node) {
         return emitLiteral(node.children[0]);
     case "Retro8.Identifier":
         return emitIdentifier(node);
+    case "Retro8.Port":
+        return emitPortRead(node);
     case "Retro8.IndirectAccess":
         Symbol s = getSymbolForIdentifier(node.children[0]);
         switch (s.kind) {
@@ -952,7 +974,6 @@ void emitFunctionEnd(ParseTree node) {
 void emitAssignmentStmt(ParseTree node) {
 
     string srctext = strip(node.input[node.begin .. node.end]);
-    writeln("\t\t\t; ", srctext);
 
     Type type = emitExpression(node.children[1]);
     bool indirect = false;
@@ -960,6 +981,18 @@ void emitAssignmentStmt(ParseTree node) {
     if (node.children[0].name == "Retro8.IndirectAccess") {
         indirect = true;
         identNode = node.children[0].children[0];
+    }
+    else if (node.children[0].name == "Retro8.Port") {
+        identNode = node.children[0].children[0];
+        Symbol s = getSymbolForIdentifier(identNode);
+        if (s.kind == Kind.Constant) {
+            writeln("  out  (", s.value, "),a\t\t; ", srctext);
+        }
+        else if (s.kind == Kind.Variable) {
+            writeln("  ld   a,", s.value, "\t\t; ", srctext);
+            writeln("  out  (", s.value, "),a");
+        }
+        return;
     }
     else {
         identNode = node.children[0];
@@ -975,15 +1008,15 @@ void emitAssignmentStmt(ParseTree node) {
     }
     if (dstreg != srcreg) {
         if (indirect) {
-            writeln("  ld   (", dstreg, "),", srcreg);
+            writeln("  ld   (", dstreg, "),", srcreg, "\t\t; ", srctext);
         }
         else {
             if (dstreg == "de" || dstreg == "hl" || dstreg == "bc") {
-                writeln("  push ", srcreg, "\t\t; ld ", dstreg, ",", srcreg);
+                writeln("  push ", srcreg, "\t\t; ld ", dstreg, ",", srcreg, "\t\t; ", srctext);
                 writeln("  pop  ", dstreg);
             }
             else {
-                writeln("  ld   ", dstreg, ",", srcreg);
+                writeln("  ld   ", dstreg, ",", srcreg, "\t\t; ", srctext);
             }
         }
     }
