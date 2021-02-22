@@ -78,7 +78,7 @@ Retro8:
                      / AsmStmt
 
     AssignmentStmt   <  (Identifier / IndirectAccess) ':=' Expression
-    ReturnStmt       < "return" Expression
+    ReturnStmt       < "return" Expression?
     BreakStmt        < "break"
     
     LoopStmt         < "loop" StatementBlock
@@ -415,6 +415,9 @@ void emitStatement(ParseTree node) {
     case "Retro8.LoopStmt":
         emitLoopStatement(node);
         break;
+    case "Retro8.BreakStmt":
+        emitBreakStatement(node);
+        break;
     case "Retro8.ReturnStmt":
         emitReturnStatement(node);
         break;
@@ -516,6 +519,10 @@ void emitIfStatement(ParseTree node) {
 
 }
 
+void emitBreakStatement(ParseTree node){
+    writeln("  break ; TODO BREAK NOT IMPLEMENTED");
+}
+
 void emitWhileStatement(ParseTree node) {
 
     ParseTree child = node.children[0];
@@ -542,9 +549,9 @@ void emitRepeatUntilStatement(ParseTree node) {
     emitExpression(child); // result ends up in register 'a'
     writeln("  cp   1\t\t; ");
 
-    string srctext = strip(child.input[node.begin .. node.end]);
+    string srctext = strip(child.input[child.begin .. child.end]);
 
-    writeln("  jr   z,", labelLoop, "\t\t; ", srctext);
+    writeln("  jr  nz,", labelLoop, "\t\t; until ", srctext);
 }
 
 void emitLoopStatement(ParseTree node) {

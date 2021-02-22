@@ -82,19 +82,21 @@ function putChar(c : A!ubyte) {
 function getChar() : A!ubyte {
     asm {
   ; check if character available
-  ld   a, 0b00000000 ; write to WR1. Next byte is RR0
+  ld   a, 0b00000000  ; write to WR1. Next byte is RR0
   out  (SIO_AC), a
   in   a,(SIO_AC)
   bit  0, a
-  ret  z  ; no char available
-; if yes, then read and return in a
-  in   a,(SIO_AD)
-    }
+  jr   nz,readchar    ; no char available
+  ld   a,0            ; FIXME: should use word here since 0 is a valid character
+  ret
+readchar:
+  in   a,(SIO_AD)     ; if yes, then read and return in a
+  }
 }
 
 
 function readLine() {
-    /*
+    
     ch : H!ubyte
     c :  L!ubyte
     buffer : DE!ubyte[]
@@ -107,9 +109,10 @@ function readLine() {
             ch := getChar()
         } until ch != 0
         
-        if (ch = '\r') or (ch = '\n') {
+        if (ch = '\r') {
+           
            [buf] := c
-           break
+           return
         }
         putChar(ch)
         if ch = '\b' {
@@ -120,8 +123,8 @@ function readLine() {
             [buffer] := ch
             buffer++;
         }
-    }*/
-
+    }
+/*
 
     asm {
 ; result in input_buf
@@ -154,7 +157,7 @@ read_line_end:
   ld a,b
   ld (v_buf), a ; input_buf[0] = b
     }
-    
+    */
 }
 
 function printk(m : HL!ubyte[]) {
@@ -205,10 +208,9 @@ function main() {
         printk("> ")
         readLine() // result in buf
 
-        if strcmp(buf,"help") = true {
+        if strcmp(buf,"help") {
             printk("Commands: help, halt, load, dump, run\r\n")
         }
-
     }
 
 }
