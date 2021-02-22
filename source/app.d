@@ -23,7 +23,7 @@ Retro8:
     Sequence     <  ConstList? VarList? ExternList? Function*
 
     ConstList    <  "constants" '{' ConstDecl* '}' Comment*
-    ConstDecl    <  Identifier '=' Literal ';'?
+    ConstDecl    <  Identifier '=' Literal ';'?  Comment*
 
     VarList      <  "variables" Comment* '{'  Comment* VarDecl* '}' Comment*
     VarDecl      <  SimpleDecl Comment* ';'?  Comment*
@@ -39,12 +39,15 @@ Retro8:
                   / "bool"
     TypeSuffix < '[' (DecLit/HexLit)? ']'
 
-    Literal      <-  DecLit / BinLit / OctLit / HexLit / BoolLit / StringLit
+    #RegType      < Register '!' Type # add this
+
+    Literal      <-  DecLit / BinLit / OctLit / HexLit / BoolLit / CharLit / StringLit
     DecLit       <~ [0-9]+
     BinLit       <~ '0b' [0-1]+
     OctLit       <~ '0o' [0-7]+
     HexLit       <~ '0x' ([0-9A-F][0-9A-F])+
     BoolLit      <- "true" / "false" 
+    CharLit      <~ :quote (!quote ((backslash [bnrt]) / .)) :quote
     StringLit    <- :doublequote ~((!(doublequote / eol)  .)*) :doublequote
 
     Function     <  "function" Comment* Signature Comment* StatementBlock Comment*
@@ -52,30 +55,41 @@ Retro8:
 
     Signature    <  Identifier Parameters (':' Register '!' Type )?
     Parameters   < '(' ParamList? ')'
-    ParamList    <   Register '!' Type TypeSuffix? Identifier (',' ParamList )?
+    ParamList    <   Identifier ':' Register '!' Type TypeSuffix? (',' ParamList )?
 
     ProtoSignature    <  Identifier ProtoParameters (':' Register '!' Type )?
     ProtoParameters   < '(' ParamTypeList? ')'
-    ParamTypeList     <  Register '!' Type TypeSuffix? Identifier? (',' ParamTypeList )?
+    ParamTypeList     < Register '!' Type TypeSuffix? (',' ParamTypeList )?
 
-    StatementBlock < '{' Comment* StatementList* '}' 
+    LocalVarDecl   <  Identifier ':' Register '!' Type TypeSuffix?
+
+    StatementBlock < '{' Comment* LocalVarDecl* Comment* StatementList* '}' 
     StatementList  < Statement Comment* ';'? Comment* (StatementList)*
 
     Statement       < UnaryExpression
                      / AssignmentStmt 
                      / ReturnStmt
                      / IfStmt
+                     / LoopStmt
+                     / RepeatUntilStmt
+                     / BreakStmt
                      / WhileStmt
                      / FuncCall
                      / AsmStmt
 
-    AssignmentStmt   <  (Identifier / RegisterLit / IndirectAccess) ':=' Expression
+    AssignmentStmt   <  (Identifier / IndirectAccess) ':=' Expression
     ReturnStmt       < "return" Expression
+    BreakStmt        < "break"
+    
+    LoopStmt         < "loop" StatementBlock
+
+    RepeatUntilStmt  < "repeat" StatementBlock "until" Expression
+
  
     IfStmt           < "if" Expression StatementBlock ("else" StatementBlock)?
     WhileStmt        < "while" Expression StatementBlock
 
-    UnaryExpression  < (Identifier / RegisterLit) PostfixOp
+    UnaryExpression  < Identifier PostfixOp
     PostfixOp        <- '++' / '--'
 
     Expression        < SimpleExpression (RelationOp SimpleExpression)?
@@ -85,21 +99,19 @@ Retro8:
     Factor        <  Literal
                     / FuncCall
                     / Identifier
-                    / RegisterLit
                     / IndirectAccess
                     / '(' Expression ')'
                     / "null"
 
-    IndirectAccess   < '[' (Identifier / Literal / RegisterLit) ']'
+    IndirectAccess   < '[' (Identifier / Literal) ']'
     
-    RegisterLit      <- '#' Register
     Register         <- "AF" / "BC" / "DE" / "HL" / "IX" / "IY" / [ABCDEFHL]
     
     ExprList      <  Expression (',' Expression)*
 
     RelationOp    <  '<=' / '>=' / '!=' / '=' / '<' / '>' 
-    AddOp         <   "||" / '+' / '-'
-    MulOp         <  '%' / '*' / '/' / "&&"
+    AddOp         <   "or" / '+' / '-'
+    MulOp         <  '%' / '*' / '/' / "and"
                 
     FuncCall     <  Identifier '(' ArgList* ')'
 
@@ -118,18 +130,6 @@ Retro8:
     Eof          <- !.
 
 `));
-/*
-    Term     < Factor (Add / Sub)*
-    Add      < "+" Factor
-    Sub      < "-" Factor
-    Factor   < Primary (Mul / Div)*
-    Mul      < "*" Primary
-    Div      < "/" Primary
-    Primary  < Parens / Neg / Number / Variable
-    Parens   < "(" Term ")"
-    Neg      < "-" Primary
-    Number   < ~([0-9]+)
-    Variable <- identifier*/
 
 enum Register {
     AF,
@@ -169,23 +169,37 @@ struct Param {
     bool isIndirection;
 }
 
-struct Symbol {
+class Symbol {
     Kind kind = Kind.None;
     string name;
     Type type;
-    bool signed;
-    bool indirection;
+    bool isSigned;
+    bool isIndirection;
     bool isString; // for internal use only
     string value;
     string code;
     string register;
     Param[] funcargs;
     int count = 1;
+
+    public this(Kind kind, string name, Type type, string register, bool signed,
+            bool indirection, bool isString, string value, string code, int count) {
+        this.kind = kind;
+        this.name = name;
+        this.type = type;
+        this.register = register;
+        isSigned = signed;
+        isIndirection = indirection;
+        this.isString = isString;
+        this.value = value;
+        this.register = register;
+        this.count = count;
+    }
 }
 
 Symbol[string] symboltable;
 
-struct LocalScope {
+class LocalScope {
     Symbol[string] symbols;
 }
 
@@ -211,7 +225,7 @@ void main(string[] args) {
     //  parseTree1 = simplifyTree(parseTree1);
 
     // pragma(msg, parseTree1.matches);
-    // writeln(parseTree1);
+    stderr.writeln(parseTree1);
 
     emitAssembly(parseTree1, 0);
 
@@ -288,10 +302,8 @@ void emitSimpleDecl(ParseTree node) {
     }
 
     // add name to symbol tables
-    Symbol symbol = {
-        Kind.Variable, "v_" ~ identifier, type, isSigned, indirection, false,
-            value, srctext, "", [], count
-    };
+    Symbol symbol = new Symbol(Kind.Variable, "v_" ~ identifier, type, "",
+            isSigned, indirection, false, value, srctext, count);
     if (node.children.length > 3)
         symbol.value = node.matches[4];
     symboltable[identifier] = symbol;
@@ -299,7 +311,7 @@ void emitSimpleDecl(ParseTree node) {
     // do type checks here
 }
 
-void recordPrototypeParams(ParseTree node, Symbol* s) {
+void recordPrototypeParams(ParseTree node, Symbol s) {
     if (node.name == "Retro8.ProtoParameters") {
         if (node.children.length > 0)
             recordPrototypeParams(node.children[0], s);
@@ -324,38 +336,45 @@ void recordPrototypeParams(ParseTree node, Symbol* s) {
 
 void recordPrototype(ParseTree node) {
     string ident = node.children[0].matches[0];
-    Symbol s = {Kind.Function, ident, Type.None, false, false, false, "", ""};
-    recordPrototypeParams(node.children[1], &s);
+    Symbol s = new Symbol(Kind.Function, ident, Type.None, "", false, false, false, "", "", 0);
+    recordPrototypeParams(node.children[1], s);
     symboltable[ident] = s;
 
+}
+
+void recordConstDecl(ParseTree node) {
+    immutable string identifier = node.children[0].matches[0];
+    node = node.children[1];
+    immutable string literaltype = node.children[0].name;
+    string srctext = strip(node.input[node.begin .. node.end]);
+    switch (literaltype) {
+    case "Retro8.DecLit":
+        // todo: check size
+        Symbol symbol = new Symbol(Kind.Constant, identifier, Type.Byte, "",
+                false, false, false, node.children[0].matches[0], srctext, 0);
+        symboltable[identifier] = symbol;
+        break;
+    case "Retro8.HexLit":
+        // todo: check size
+        Symbol symbol = new Symbol(Kind.Constant, identifier, Type.Byte, "",
+                false, false, false, node.children[0].matches[0], srctext, 0);
+        symboltable[identifier] = symbol;
+        break;
+    case "Retro8.StringLit":
+        Symbol symbol = new Symbol(Kind.Constant, identifier, Type.Byte, "",
+                false, true, true, node.children[0].matches[0], srctext, 0);
+        symboltable[identifier] = symbol;
+        break;
+    default:
+        break;
+    }
 }
 
 void emitAssembly(ParseTree root, int level) {
     foreach (ref node; root.children) {
         switch (node.name) {
         case "Retro8.ConstDecl":
-            immutable string identifier = node.children[0].matches[0];
-            immutable string literaltype = node.children[1].name;
-            string srctext = strip(node.input[node.begin .. node.end]);
-            switch (literaltype) {
-            case "Retro8.DecLit":
-                // todo: check size
-                Symbol symbol = {
-                    Kind.Constant, identifier, Type.Byte, false, false, false,
-                        node.children[1].matches[0], srctext
-                };
-                symboltable[identifier] = symbol;
-                break;
-            case "Retro8.StringLit":
-                Symbol symbol = {
-                    Kind.Constant, identifier, Type.Byte, true, true, false,
-                        node.children[1].matches[0], srctext
-                };
-                symboltable[identifier] = symbol;
-                break;
-            default:
-                break;
-            }
+            recordConstDecl(node);
             break;
         case "Retro8.ProtoSignature":
             recordPrototype(node);
@@ -365,7 +384,7 @@ void emitAssembly(ParseTree root, int level) {
             break;
         case "Retro8.Function":
             emitFunctionStart(node);
-            emitStatementList(node.children[1]);
+            emitStatementBlock(node.children[1]);
             emitFunctionEnd(node);
             break;
         default:
@@ -390,8 +409,17 @@ void emitStatement(ParseTree node) {
     case "Retro8.WhileStmt":
         emitWhileStatement(node);
         break;
+    case "Retro8.RepeatUntilStmt":
+        emitRepeatUntilStatement(node);
+        break;
+    case "Retro8.LoopStmt":
+        emitLoopStatement(node);
+        break;
     case "Retro8.ReturnStmt":
         emitReturnStatement(node);
+        break;
+    case "Retro8.UnaryExpression":
+        emitUnaryExprStatement(node);
         break;
     case "Retro8.AsmStmt":
         writeln(node.children[0].matches[0]);
@@ -403,41 +431,136 @@ void emitStatement(ParseTree node) {
     }
 }
 
+void emitUnaryExprStatement(ParseTree node) {
+    string srctext = strip(node.input[node.begin .. node.end]);
+    bool indirect = node.children[0].name == "Retro8.IndirectAccess";
+
+    if (indirect)
+        node = node.children[0];
+
+    string identifier = node.children[0].matches[0];
+    string operator = node.children[1].matches[0];
+    Symbol s = getSymbolForIdentifier(node.children[0]);
+    string op = "  inc  ";
+    if (operator == "--")
+        op = "  dec  ";
+    if (s.kind == Kind.Register) {
+        writeln(op, s.register, "\t\t; ", srctext);
+    }
+    else if (s.kind == Kind.Variable) {
+        if (indirect)
+            writeln(op, "(", s.name, ")\t\t; ", srctext);
+        else
+            stderr.writeln("** ERROR ** Can't increment global variable addresses");
+    }
+}
+
+void processLocalDecl(ParseTree node) {
+    string srctext = strip(node.input[node.begin .. node.end]);
+    immutable Type type = textToType(node.matches[2]);
+    bool isSigned = isTypeSigned(node.matches[2]);
+    string identifier = node.children[0].matches[0];
+    bool indirection = node.children.length > 3 && node.children[3].name == "Retro8.TypeSuffix";
+    int count = 0;
+    string value = "";
+
+    string register = node.children[1].matches[0].toLower();
+    // add name to symbol tables
+    Symbol symbol = new Symbol(Kind.Register, identifier, type, register,
+            isSigned, indirection, false, value, srctext, count);
+
+    localsymbolstack.back.symbols[identifier] = symbol;
+
+}
+
 void emitStatementList(ParseTree node) {
-    foreach (child; node.children) {
+    foreach (child; node.children)
         emitStatement(child);
+}
+
+void emitStatementBlock(ParseTree node) {
+    // don't create a new scope. It has been created by the function already
+    foreach (child; node.children) {
+        if (child.name == "Retro8.LocalVarDecl") {
+            processLocalDecl(child);
+        }
+        if (child.name == "Retro8.StatementList") {
+            emitStatementList(child);
+        }
     }
 }
 
 void emitIfStatement(ParseTree node) {
     ParseTree child = node.children[0];
-    immutable string label = "endif_" ~ genIdentifier();
+    immutable string endLabel = "endif_" ~ genIdentifier();
+    immutable string elseLabel = "else_" ~ genIdentifier();
     immutable string srctxt = "if " ~ strip(child.input[child.begin .. child.end]);
+    writeln("\t\t\t; ", srctxt);
     emitExpression(child); // result ends up in register 'a'
     writeln("  cp   1\t\t; " ~ srctxt);
-    writeln("  jr   nz," ~ label);
-    emitStatementList(node.children[1]);
-    writeln(label ~ ":");
+    if (node.children.length > 2)
+        writeln("  jr   nz," ~ elseLabel);
+    else
+        writeln("  jr   nz," ~ endLabel);
+    if (node.children[1].children.length > 0)
+        emitStatementList(node.children[1].children[0]);
+    if (node.children.length > 2) {
+        // jump over else
+        writeln("  jr   ", endLabel);
+        writeln(elseLabel, ":\t\t; else");
+        // we have an else block
+        if (node.children[2].children.length > 0)
+            emitStatementList(node.children[2].children[0]);
+    }
+    writeln(endLabel, ":\t; endif");
+
 }
 
 void emitWhileStatement(ParseTree node) {
+
     ParseTree child = node.children[0];
+
+    string srctext = strip(child.input[child.begin .. child.end]);
+
     immutable string labelEnd = "wend_" ~ genIdentifier();
     immutable string labelLoop = "while_" ~ genIdentifier();
-    immutable string srctxt = "while " ~ strip(child.input[child.begin .. child.end]);
-    writeln(labelLoop ~ ":");
+    writeln(labelLoop ~ ":\t; while ", srctext);
     emitExpression(child); // result ends up in register 'a'
-    writeln("  cp   1\t\t; " ~ srctxt);
-    writeln("  jr   nz," ~ labelEnd);
+    writeln("  cp   1");
+    writeln("  jr   nz,", labelEnd);
     emitStatementList(node.children[1]);
-    writeln("  jp   " ~ labelLoop);
-    writeln(labelEnd ~ ":");
+    writeln("  jp   ", labelLoop, "\t; wend ", srctext);
+    writeln(labelEnd, ":");
+}
+
+void emitRepeatUntilStatement(ParseTree node) {
+
+    ParseTree child = node.children[1];
+    immutable string labelLoop = "repeat_" ~ genIdentifier();
+    writeln(labelLoop ~ ":\t\t; repeat");
+    emitStatementList(node.children[0]);
+    emitExpression(child); // result ends up in register 'a'
+    writeln("  cp   1\t\t; ");
+
+    string srctext = strip(child.input[node.begin .. node.end]);
+
+    writeln("  jr   z,", labelLoop, "\t\t; ", srctext);
+}
+
+void emitLoopStatement(ParseTree node) {
+
+    immutable string labelLoop = "loop_" ~ genIdentifier();
+    writeln(labelLoop, ":\t; loop");
+    emitStatementList(node.children[0]);
+    writeln("  jp   ", labelLoop, "\t; endloop");
 }
 
 void emitReturnStatement(ParseTree node) {
+    string srctext = strip(node.input[node.begin .. node.end]);
+
     if (node.children.length > 0)
         emitExpression(node.children[0]);
-    writeln("  ret");
+    writeln("  ret\t\t\t; ", srctext);
 }
 
 Symbol getSymbolForIdentifier(ParseTree node) {
@@ -452,7 +575,29 @@ Symbol getSymbolForIdentifier(ParseTree node) {
 
     // not in any symbol table
     stderr.writeln("Unknown identifier near: " ~ node.input[node.begin .. node.end]);
-    return Symbol();
+    exit(1);
+    return null;
+}
+
+ubyte unEscapeCharLiteral(string s) {
+    if (s[0] == '\\') {
+        switch (s[1]) {
+        case 'r':
+            return 13;
+        case 'n':
+            return 10;
+        case 't':
+            return 9;
+        case 'b':
+            return 8;
+        case '\\':
+            return '\\';
+        default:
+            stderr.writeln("** ERROR ** Unsupported character literal: ", s[0]);
+            exit(1);
+        }
+    }
+    return s[0];
 }
 
 Type emitLiteral(ParseTree node) {
@@ -466,20 +611,22 @@ Type emitLiteral(ParseTree node) {
         // TODO: convert the literal. If larger than 8 bit
         writeln("  ld   a,", literal);
         return Type.Byte;
+    case "Retro8.CharLit":
+        writeln("  ld   a,", unEscapeCharLiteral(literal));
+        return Type.Byte;
     case "Retro8.BoolLit":
         writeln("  ld   a,", (literal == "true" ? "1" : "0"));
         return Type.Bool;
     case "Retro8.StringLit":
         // string literal found. put it constant list
         string identifier = genIdentifier();
-        Symbol symbol = {
-            Kind.Constant, identifier, Type.Byte, false, true, true, literal, ""
-        };
+        Symbol symbol = new Symbol(Kind.Constant, identifier, Type.Byte, "",
+                false, true, true, literal, "", 0);
         symboltable[identifier] = symbol;
         writeln("  ld   bc,", identifier, "\t; ad-hoc string literal");
         return Type.Word;
     default:
-        stderr.writeln("Unknown node: ", node.name);
+        stderr.writeln("Unknown literal type: ", node.name);
         break;
     }
     return Type.Byte;
@@ -493,22 +640,23 @@ Type emitIdentifier(ParseTree node) {
 
     switch (s.kind) {
     case Kind.Constant:
-        if (s.indirection)
+        if (s.isIndirection)
             writeln("  ld   bc,", s.name,
                     "\t; constant indirection ", __LINE__);
         else
-            writeln("  ld   a,", s.value, "\t; constant no indirection ", __LINE__);
+            writeln("  ld   a,", s.value, "\t\t; constant no indirection ", __LINE__);
         break;
     case Kind.Variable:
-        if (s.indirection) {
-            writeln("  ld   bc,", s.name, "\t; variable indirection ", __LINE__);
+        if (s.isIndirection) {
+            writeln("  ld   bc,", s.name, "\t\t; variable indirection ", __LINE__);
             type = Type.Word;
         }
         else
-            writeln("  ld   a,(", s.name, ")\t; variable no indirection ", __LINE__);
+            writeln("  ld   a,(", s.name, ")\t\t; variable no indirection ", __LINE__);
         break;
     case Kind.Register:
-        writeln("  ld   a,", s.name, "\t; register");
+        if (s.register[0] != 'a')
+            writeln("  ld   a,", s.register, "\t\t; register");
         break;
     default:
         stderr.writeln("Internal compiler error. Unknown symbol");
@@ -648,7 +796,7 @@ Type emitExpression(ParseTree node) {
             writeln("  ld   a,(", s.register, ")\t\t; register ", __LINE__);
             break;
         case Kind.Variable:
-            if (!s.indirection)
+            if (!s.isIndirection)
                 stderr.writeln("WARNING: using byte as pointer ", __LINE__);
             writeln("  ld   hl,(", s.name, ")\t\tvariable ", __LINE__);
             writeln("  ld   a,(hl)");
@@ -680,147 +828,6 @@ Type emitExpression(ParseTree node) {
     return type;
 }
 
-/*
-void emitExpression(ParseTree node) {
-
-    if (node.children.length == 0) {
-        // we're at a leaf node (can only be: literal, or identifier)
-        Symbol s = getSymbol(node);
-        if (node.name == "Retro8.Register") {
-            writeln("  ld   a,", getOperand(node));
-        }
-        else {
-                // identifier can be constant or variable
-            if (isIndirection(node)) {
-                writeln("  ld   hl,", getOperand(node));
-            }
-            else {
-                writeln("  ld   a,", getOperand(node));
-            }
-        }
-    }
-    else if (node.children.length == 1) {
-        // nothing do do here; descend further
-        if (node.name == "Retro8.Literal") {
-            if (node.children[0].name == "Retro8.StringLit")
-                writeln("  ld   bc, ", getOperand(node.children[0]));
-            else
-                writeln("  ld   a, ", getOperand(node.children[0]));
-        }
-        else if (node.name == "Retro8.IndirectAccess") {
-            writeln("  ld   a,(", getOperand(node.children[0]), ")");
-        }
-        else if (node.name == "Retro8.FuncCall") {
-            emitFunctionCall(node);
-        }
-        else {
-            emitExpression(node.children[0]);
-        }
-    }
-    else if (node.name == "Retro8.FuncCall") {
-        emitFunctionCall(node);
-    }
-    else if (node.name == "Retro8.Factor") {
-        // must have two children or would have been caught above
-        // this is an array index identifier
-        emitExpression(node.children[0]); // gets base address
-        emitExpression(node.children[1]); // gets offset
-        writeln("  push bc");
-        writeln("  ld   bc,a"); // accu contains offset
-        writeln("  add  hl,bc");
-        writeln("  ld   a,(hl)");
-        writeln("  pop  bc");
-    }
-    else if (node.name == "Retro8.SimpleExpression"
-            || node.name == "Retro8.Term" || node.name == "Retro8.Expression") {
-        // nodes have three children, must be an operator
-        ParseTree op1 = node.children[0];
-        ParseTree op2 = node.children[2];
-
-        // check if we have to descend first
-        if (op1.name == "Retro8.SimpleExpression" || op1.name == "Retro8.Term"
-                || op1.name == "Retro8.Expression") {
-            emitExpression(op1);
-            //writeln("  ld   c,a\t\t; store result from op1"); // move a to c
-            writeln("  push af\t\t; store result from op1");
-            emitExpression(op2);
-            writeln("  ld   b,a\t\t; swap operands");
-            writeln("  pop  af\t\t; fetch stored result");
-        }
-        else {
-            emitExpression(op2);
-            writeln("  ld   b,a\t\t; store result 3");
-            emitExpression(op1);
-        }
-
-        // emit operator
-        switch (node.children[1].name) {
-        case "Retro8.AddOp":
-            switch (node.children[1].matches[0]) {
-            case "+":
-                writeln("  add  b");
-                break;
-            case "-":
-                writeln("  sub  b");
-                break;
-            default:
-                break;
-            }
-            break;
-        case "Retro8.MulOp":
-            switch (node.children[1].matches[0]) {
-            case "*":
-                writeln("  call mul");
-                break;
-            case "/":
-                writeln("  call div");
-                break;
-            case "%":
-                writeln("  call div");
-                break;
-            default:
-                break;
-            }
-            break;
-        case "Retro8.RelationOp":
-            writeln("  cp   b");
-            // assume false
-            writeln("  ld   a,0\t\t; false");
-            string lblEnd = "false_" ~ genIdentifier();
-            switch (node.children[1].matches[0]) {
-            case "=":
-                writeln("  jr   nz," ~ lblEnd);
-                break;
-            case "!=":
-                writeln("  jr   z," ~ lblEnd);
-                break;
-            case "<":
-                writeln("  jr   nc," ~ lblEnd);
-                break;
-            case ">":
-                writeln("  jr   c," ~ lblEnd);
-                break;
-            case "<=":
-                writeln("  jr   c," ~ lblEnd);
-                writeln("  jr   nz," ~ lblEnd);
-                break;
-            case ">=":
-                writeln("  jr   nc," ~ lblEnd);
-                writeln("  jr   nz," ~ lblEnd);
-                break;
-            default:
-                break;
-            }
-            writeln("  ld   a,1\t\t; true");
-            writeln(lblEnd ~ ":");
-            break;
-        default:
-            break;
-        }
-    }
-}
-*/
-
 Type emitFunctionCall(ParseTree node) {
     //foreach argument in the list
     Symbol s = getSymbolForIdentifier(node.children[0]);
@@ -841,7 +848,7 @@ Type emitFunctionCall(ParseTree node) {
                 writeln("  ld   ", p.register, ",a");
             }
             else {
-                writeln("  push bc\t\t;   ld ", p.register, ",bc");
+                writeln("  push bc\t\t; ld ", p.register, ",bc");
                 writeln("  pop  ", p.register);
             }
         }
@@ -849,29 +856,25 @@ Type emitFunctionCall(ParseTree node) {
             Param p = s.funcargs[i];
             if (p.register != "bc" && p.register != "a")
                 continue;
-            Type type = emitExpression(arg);
-            // if (type == Type.Bool || type == Type.Byte) {
-            //     writeln("  ld   ", p.register, ",a");
-            // }
-            // else {
-            //     writeln("  ld   ", p.register, ",bc");
-            // }
+            emitExpression(arg);
         }
     }
-    writeln("  call " ~ node.children[0].matches[0] ~ "\t\t; " ~ strip(
+    writeln("  call " ~ node.children[0].matches[0] ~ "\t; " ~ strip(
             node.input[node.begin .. node.end]));
     return s.type;
 }
 
-void processParamList(ParseTree node, Symbol* s) {
-    string register = node.children[0].matches[0].toLower();
-    Type type = textToType(node.children[1].matches[0]);
-    bool isIndirection = node.children[2].name == "Retro8.TypeSuffix";
-    string identifier = node.children[isIndirection ? 3 : 2].matches[0];
+void processParamList(ParseTree node, Symbol s) {
+    string register = node.children[1].matches[0].toLower();
+    Type type = textToType(node.children[2].matches[0]);
+    bool isIndirection = false;
+    if (node.children.length > 3)
+        isIndirection = node.children[3].name == "Retro8.TypeSuffix";
+    string identifier = node.children[0].matches[0];
     bool isSigned = isTypeSigned(node.matches[2]);
-    Symbol ls = {
-        Kind.Register, "", type, isSigned, isIndirection, false, "", "", register
-    };
+
+    Symbol ls = new Symbol(Kind.Register, identifier, type, register, isSigned,
+            isIndirection, false, "", "", 0);
 
     localsymbolstack.back.symbols[identifier] = ls;
     Param p = {register, type, isIndirection};
@@ -892,7 +895,7 @@ void emitFunctionSignature(ParseTree node) {
 
     string identifier = node.children[0].matches[0];
     // record  in local symbol table
-    LocalScope ls;
+    LocalScope ls = new LocalScope();
     localsymbolstack ~= ls;
 
     Type type = Type.None;
@@ -902,19 +905,16 @@ void emitFunctionSignature(ParseTree node) {
         isSigned = isTypeSigned(node.children[3].matches[0]);
     }
     // add the function to the global symbol table
-    Symbol s = {Kind.Function, identifier, type, isSigned, false, false, "", ""};
-
+    Symbol s = new Symbol(Kind.Function, identifier, type, "", isSigned, false, false, "", "", 0);
     if (node.children[1].children.length > 0) {
-        processParamList(node.children[1].children[0], &s);
+        processParamList(node.children[1].children[0], s);
     }
     symboltable[identifier] = s;
-
     writeln(node.matches[0] ~ ":\t\t\t; " ~ strip(node.input[node.begin .. node.end]));
 }
 
 void emitFunctionStart(ParseTree node) {
-    emitFunctionSignature(node.children[0]);
-    // save all registers we're going to use
+    emitFunctionSignature(node.children[0]); // save all registers we're going to use
     /*    if (localsymbolstack.length > 0) {
         Symbol[string] localsymbols = localsymbolstack.back.symbols;
         foreach (Symbol s; localsymbols.values) {
@@ -943,22 +943,41 @@ void emitFunctionEnd(ParseTree node) {
 }
 
 void emitAssignmentStmt(ParseTree node) {
-    writeln("            \t\t; " ~ strip(node.input[node.begin .. node.end]));
+
+    string srctext = strip(node.input[node.begin .. node.end]);
+    writeln("\t\t\t; ", srctext);
+
     Type type = emitExpression(node.children[1]);
-    // check result of expression
-    if (node.children[0].name == "Retro8.RegisterLit") {
-        string register = node.children[0].matches[1].toLower();
-        if (register.length == 2) {
-            writeln("  ld   ", register[0], ",0");
-            writeln("  ld   ", register[1], ",a");
-        }
-        else {
-            if (register[0] != 'a')
-                writeln("  ld   " ~ register ~ ",a");
-        }
+    bool indirect = false;
+    ParseTree identNode;
+    if (node.children[0].name == "Retro8.IndirectAccess") {
+        indirect = true;
+        identNode = node.children[0].children[0];
     }
     else {
-        Symbol s = getSymbolForIdentifier(node.children[0]);
-        writeln("  ld   (", s.name, "),a");
+        identNode = node.children[0];
+    }
+    Symbol s = getSymbolForIdentifier(identNode);
+    // TODO: emit warning. access on indirect if not and vice versa
+    string srcreg = "a";
+    if (type == Type.Word)
+        srcreg = "bc";
+    string dstreg = s.name;
+    if (s.kind == Kind.Register) {
+        dstreg = s.register;
+    }
+    if (dstreg != srcreg) {
+        if (indirect) {
+            writeln("  ld   (", dstreg, "),", srcreg);
+        }
+        else {
+            if (dstreg == "de" || dstreg == "hl" || dstreg == "bc") {
+                writeln("  push ", srcreg, "\t\t; ld ", dstreg, ",", srcreg);
+                writeln("  pop  ", dstreg);
+            }
+            else {
+                writeln("  ld   ", dstreg, ",", srcreg);
+            }
+        }
     }
 }

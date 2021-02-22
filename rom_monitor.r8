@@ -5,8 +5,6 @@ constants {
 
 variables {
     buf : ubyte[255]
-    a: ubyte
-    b: ubyte := 5
 }
 
 extern {
@@ -70,9 +68,63 @@ wait_serial_again:
     }
 }
 
-function readLine() {
+
+function putChar(c : A!ubyte) {
     asm {
-    ; result in input_buf
+; put comment here in order to prevent swallowing whitespace
+  push af
+  call waitSerial  ; make sure we can send
+  pop  af
+  out  (SIO_AD), a
+    }
+}
+
+function getChar() : A!ubyte {
+    asm {
+  ; check if character available
+  ld   a, 0b00000000 ; write to WR1. Next byte is RR0
+  out  (SIO_AC), a
+  in   a,(SIO_AC)
+  bit  0, a
+  ret  z  ; no char available
+; if yes, then read and return in a
+  in   a,(SIO_AD)
+    }
+}
+
+
+function readLine() {
+    /*
+    ch : H!ubyte
+    c :  L!ubyte
+    buffer : DE!ubyte[]
+  
+    buffer := buf
+    buffer++ // skip string length
+
+    loop {
+        repeat {
+            ch := getChar()
+        } until ch != 0
+        
+        if (ch = '\r') or (ch = '\n') {
+           [buf] := c
+           break
+        }
+        putChar(ch)
+        if ch = '\b' {
+            putChar(' ')
+            putChar('\b')
+        }
+        else {
+            [buffer] := ch
+            buffer++;
+        }
+    }*/
+
+
+    asm {
+; result in input_buf
   ld de, v_buf+1
   ld b,0
 read_line_again:
@@ -102,32 +154,10 @@ read_line_end:
   ld a,b
   ld (v_buf), a ; input_buf[0] = b
     }
+    
 }
 
-function putChar(A!ubyte c) {
-    asm {
-; put comment here in order to prevent swallowing whitespace
-  push af
-  call waitSerial  ; make sure we can send
-  pop  af
-  out  (SIO_AD), a
-    }
-}
-
-function getChar() : A!ubyte {
-    asm {
-  ; check if character available
-  ld   a, 0b00000000 ; write to WR1. Next byte is RR0
-  out  (SIO_AC), a
-  in   a,(SIO_AC)
-  bit  0, a
-  ret  z  ; no char available
-; if yes, then read and return in a
-  in   a,(SIO_AD)
-    }
-}
-
-function printk(HL!ubyte[] m) {
+function printk(m : HL!ubyte[]) {
     asm {
   ; print kernel message to serial (uses pascal strings)
   push hl
@@ -143,15 +173,17 @@ printk_loop:
 }
 
 
-function strcmp(HL!ubyte[] a, DE!ubyte[] b) : A!bool {
-    #A := 0
-    while #A > 0 {
-        if [a] != [b] {
+function strcmp(s1 : HL!ubyte[], s2 : DE!ubyte[]) : A!bool {
+    b : C!ubyte
+    
+    b := [s1]
+    while b >= 0 {
+        if [s1] != [s2] {
           return false
         }
-        a++
-        b++
-        #A--
+        s1++
+        s2++
+        b--
     }
     return true
 }
@@ -168,12 +200,12 @@ function main() {
     printk("Written in r8");
     printk("(C) Jan-Feb 2021 Jaap Geurts\r\n");
 
-    while true {
+    loop {
         // show prompt
         printk("> ")
         readLine() // result in buf
 
-        if strcmp(buf,"help") = 0 {
+        if strcmp(buf,"help") = true {
             printk("Commands: help, halt, load, dump, run\r\n")
         }
 
