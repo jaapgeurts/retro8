@@ -22,7 +22,7 @@ Retro8:
 
     Sequence     <  ConstList? VarList? ExternList? Function*
 
-    ConstList    <  "constants" '{' ConstDecl* '}' Comment*
+    ConstList    <  "constants" '{' Comment* ConstDecl* '}' Comment*
     ConstDecl    <  Identifier '=' Literal ';'?  Comment*
 
     VarList      <  "variables" Comment* '{'  Comment* VarDecl* '}' Comment*
@@ -230,18 +230,32 @@ void main(string[] args) {
     // pragma(msg, parseTree1.matches);
     stderr.writeln(parseTree1);
 
+    // TODO: make it two pass.
+
     emitAssembly(parseTree1, 0);
+
+    emitConst();
 
     emitData();
 
+}
+
+void emitConst() {
+    writeln("; List of constants");
+    foreach (v; symboltable.values.filter!(a => !a.isString
+            && (a.type == Type.Byte || a.type == Type.Word) && a.kind == Kind.Constant)) {
+        // todo check if there is an array.
+        string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
+        writeln(v.name, "\tequ\t", v.value, "\t\t; ", v.code);
+    }
 }
 
 void emitData() {
     foreach (v; symboltable.values.sort!((a, b) => a.isString == b.isString
             ? false : (a.isString ? false : true))) {
         // todo check if there is an array.
-        if (v.kind == Kind.Variable || (v.kind == Kind.Constant)) {
-            string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
+        string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
+        if (v.kind == Kind.Variable) {
             switch (v.type) {
             case Type.Byte:
                 if (v.isString) {
@@ -265,6 +279,12 @@ void emitData() {
             default:
                 writeln("Unknown type: ", v);
                 break;
+            }
+        }
+        else if (v.kind == Kind.Constant) {
+            if (v.type == Type.Byte && v.isString) {
+                writeln(v.name, ":", tabs, "ascii ",
+                        to!string(v.value.length - v.value.count('\\')), ",\"", v.value, "\"");
             }
         }
     }
@@ -346,10 +366,10 @@ void recordPrototype(ParseTree node) {
 }
 
 void recordConstDecl(ParseTree node) {
+    string srctext = strip(node.input[node.begin .. node.end]);
     immutable string identifier = node.children[0].matches[0];
     node = node.children[1];
     immutable string literaltype = node.children[0].name;
-    string srctext = strip(node.input[node.begin .. node.end]);
     switch (literaltype) {
     case "Retro8.DecLit":
         // todo: check size
@@ -654,7 +674,7 @@ Type emitIdentifier(ParseTree node) {
             writeln("  ld   bc,", s.name,
                     "\t; constant indirection ", __LINE__);
         else
-            writeln("  ld   a,", s.value, "\t\t; constant no indirection ", __LINE__);
+            writeln("  ld   a,", s.name, "\t\t; constant no indirection ", __LINE__);
         break;
     case Kind.Variable:
         if (s.isIndirection) {
@@ -679,18 +699,19 @@ Type emitIdentifier(ParseTree node) {
 
 Type emitPortRead(ParseTree node) {
     // resolve the symbol if it's an identifier
+    string srctext = strip(node.input[node.begin .. node.end]);
     string port;
     if (node.children[0].name == "Retro8.Identifier") {
         Symbol s = getSymbolForIdentifier(node.children[0]);
         if (s.kind == Kind.Constant) {
-            port = s.value;
+            port = s.name;
+            writeln("  in   a,(", port, ")\t\t; ", srctext);
         }
         else if (s.kind == Kind.Variable) {
             writeln("  ld   c,(", s.name, ")");
+            writeln("  in   a,c\t\t; ", srctext);
         }
     }
-    string srctext = strip(node.input[node.begin .. node.end]);
-    writeln("  in   a,(", port, ")\t\t; ", srctext);
     return Type.Byte;
 }
 
@@ -819,7 +840,7 @@ Type emitExpression(ParseTree node) {
         Symbol s = getSymbolForIdentifier(node.children[0]);
         switch (s.kind) {
         case Kind.Constant:
-            writeln("  ld   a,(", s.value, ")\t\t; constant ", __LINE__);
+            writeln("  ld   a,(", s.name, ")\t\t; constant ", __LINE__);
             break;
         case Kind.Register:
             writeln("  ld   a,(", s.register, ")\t\t; register ", __LINE__);
@@ -986,7 +1007,7 @@ void emitAssignmentStmt(ParseTree node) {
         identNode = node.children[0].children[0];
         Symbol s = getSymbolForIdentifier(identNode);
         if (s.kind == Kind.Constant) {
-            writeln("  out  (", s.value, "),a\t\t; ", srctext);
+            writeln("  out  (", s.name, "),a\t\t; ", srctext);
         }
         else if (s.kind == Kind.Variable) {
             writeln("  ld   a,", s.value, "\t\t; ", srctext);

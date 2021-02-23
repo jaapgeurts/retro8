@@ -1,6 +1,8 @@
 unit rom_monitor
 
 constants {
+
+    // TODO: export these as EQU
     CTC_A  = 0x00
   // SIO_AD = 0x40
     SIO_BD = 0x41
@@ -77,6 +79,7 @@ function putChar(c : A!ubyte) {
 }
 
 function getChar() : A!ubyte {
+    
     asm {
   ; check if character available
   ld   a, 0b00000000  ; write to WR1. Next byte is RR0
