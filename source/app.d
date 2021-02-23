@@ -250,7 +250,42 @@ void emitConst() {
     }
 }
 
+string toAsmStr(string src) {
+    string dst = "\"";
+    int count = 0;
+    bool instring = true;
+
+    int i = 0;
+    while (i < src.length) {
+        char c = src[i];
+        if (c != '\\') {
+            if (!instring) {
+                dst ~= ",\"";
+                instring = !instring;
+            }
+            dst ~= c;
+        }
+        else {
+            if (instring) {
+                dst ~= '\"';
+                instring = !instring;
+            }
+            dst ~= "," ~ to!string(unEscapeCharLiteral(src[i..i+2]));
+            i++;
+        }
+        count++;
+        i++;
+    }
+    if (instring)
+        dst ~= '\"';
+
+    dst = to!string(count) ~ "," ~ dst;
+
+    return dst;
+}
+
 void emitData() {
+    writeln("; variables and strings");
     foreach (v; symboltable.values.sort!((a, b) => a.isString == b.isString
             ? false : (a.isString ? false : true))) {
         // todo check if there is an array.
@@ -259,17 +294,17 @@ void emitData() {
             switch (v.type) {
             case Type.Byte:
                 if (v.isString) {
-                    writeln(v.name, ":", tabs, "ascii ",
-                            to!string(v.value.length - v.value.count('\\')), ",\"", v.value, "\"");
+                    writeln(v.name, ":", tabs, "ascii ", toAsmStr(v.value));
                 }
                 else {
                     string value = v.value;
                     if (value == "")
                         value = "0";
                     if (v.count > 1)
-                        writeln(v.name, ":", tabs, "dc ", v.count, ",", value, "\t\t; ", v.code);
+                        writeln(v.name, ":", tabs, "dc    ", v.count, ",",
+                                value, "\t\t; ", v.code);
                     else
-                        writeln(v.name, ":", tabs, "db ", value, "\t\t; ", v.code);
+                        writeln(v.name, ":", tabs, "db    ", value, "\t\t; ", v.code);
                 }
 
                 break;
@@ -283,8 +318,7 @@ void emitData() {
         }
         else if (v.kind == Kind.Constant) {
             if (v.type == Type.Byte && v.isString) {
-                writeln(v.name, ":", tabs, "ascii ",
-                        to!string(v.value.length - v.value.count('\\')), ",\"", v.value, "\"");
+                writeln(v.name, ":", tabs, "ascii ", toAsmStr(v.value));
             }
         }
     }
@@ -623,7 +657,7 @@ ubyte unEscapeCharLiteral(string s) {
         case '\\':
             return '\\';
         default:
-            stderr.writeln("** ERROR ** Unsupported character literal: ", s[0]);
+            stderr.writeln("** ERROR ** Unsupported character literal: ", s[1]);
             exit(1);
         }
     }

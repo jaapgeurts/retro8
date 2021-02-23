@@ -166,7 +166,7 @@ function main() {
     initSerial()
 
     printk("Z80 ROM Monitor v0.1\r\n")
-    printk("Written in r8");
+    printk("Written in r8\r\n");
     printk("(C) Jan-Feb 2021 Jaap Geurts\r\n");
 
     loop {
