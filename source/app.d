@@ -245,32 +245,32 @@ void emitConst() {
     foreach (v; symboltable.values.filter!(a => !a.isString
             && (a.type == Type.Byte || a.type == Type.Word) && a.kind == Kind.Constant)) {
         // todo check if there is an array.
-        string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
+        string tabs = generate!(() => '\t').takeExactly((23 - v.name.length) / 8 + 1).array;
         writeln(v.name, "\tequ\t", v.value, "\t\t; ", v.code);
     }
 }
 
 string toAsmStr(string src) {
-    string dst = "\"";
+    string dst = "";
     int count = 0;
-    bool instring = true;
+    bool instring = false;
 
     int i = 0;
     while (i < src.length) {
         char c = src[i];
-        if (c != '\\') {
+        if (c != '\\') { // normal char
             if (!instring) {
-                dst ~= ",\"";
-                instring = !instring;
+                dst ~= "\"";
+                instring = true;
             }
             dst ~= c;
         }
-        else {
+        else { // escaped char
             if (instring) {
-                dst ~= '\"';
-                instring = !instring;
+                dst ~= "\",";
+                instring = false;
             }
-            dst ~= "," ~ to!string(unEscapeCharLiteral(src[i..i+2]));
+            dst ~= to!string(unEscapeCharLiteral(src[i .. i + 2])) ~ ",";
             i++;
         }
         count++;
@@ -278,10 +278,36 @@ string toAsmStr(string src) {
     }
     if (instring)
         dst ~= '\"';
+    else if (count > 0)
+        dst = dst[0 .. $ - 1];
 
-    dst = to!string(count) ~ "," ~ dst;
+    if (count > 0) {
+        dst = to!string(count) ~ "," ~ dst;
+    }
 
     return dst;
+}
+
+unittest {
+    string str;
+    str = toAsmStr("");
+    assert(str == "", str);
+    assert(toAsmStr("a") == `1,"a"`);
+    assert(toAsmStr("ab") == `2,"ab"`);
+    assert(toAsmStr("abc") == `3,"abc"`);
+    str = toAsmStr(r"\n");
+    assert(str == "1,10", str);
+    assert(toAsmStr(r"\n\r") == "2,10,13");
+    str = toAsmStr(r"a\n");
+    assert(str == `2,"a",10`,str);
+    assert(toAsmStr(r"ab\n") == `3,"ab",10`);
+    assert(toAsmStr(r"abc\n") == `4,"abc",10`);
+    assert(toAsmStr(r"\na") == `2,10,"a"`);
+    assert(toAsmStr(r"\nab") == `3,10,"ab"`);
+    assert(toAsmStr(r"\nabc") == `4,10,"abc"`);
+    assert(toAsmStr(r"a\na") == `3,"a",10,"a"`);
+    assert(toAsmStr(r"ab\nab") == `5,"ab",10,"ab"`);
+    assert(toAsmStr(r"abc\nabc") == `7,"abc",10,"abc"`);
 }
 
 void emitData() {
@@ -943,8 +969,10 @@ Type emitFunctionCall(ParseTree node) {
             emitExpression(arg);
         }
     }
-    writeln("  call " ~ node.children[0].matches[0] ~ "\t; " ~ strip(
-            node.input[node.begin .. node.end]));
+    string identifier = node.children[0].matches[0];
+    string instruction = "  call " ~ identifier;
+    string tabs = generate!(() => '\t').takeExactly((23 - instruction.length) / 8 + 1).array;
+    writeln(instruction, tabs, "; " ~ strip(node.input[node.begin .. node.end]));
     return s.type;
 }
 
