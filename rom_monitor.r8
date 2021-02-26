@@ -11,6 +11,7 @@ constants {
 
     SIO_AC = 0x80
     SIO_AD = 0x81
+
 }
 
 variables {
@@ -41,7 +42,7 @@ function initTimer() {
     #CTC_A := 1
 }
 
-function initSerial() {
+function initSerialCon() {
     // reset channel 0
     #SIO_AC := 0b00110000
 
@@ -55,14 +56,24 @@ function initSerial() {
     #SIO_AC := 0b01101000 // send enable
 }
 
-function waitSerial() {
+function initSerialKbd() {
+  #SIO_BC :=  0b00110000 //  reset channel 1
+
+  #SIO_BC :=  0b00000100 // write to WR1. Next byte is for WR4
+  #SIO_BC :=  0b00000101 //  set clock rate, odd parity, 1 stopbit
+
+  #SIO_BC :=  0b00000011 // enable receive (WR3)
+  #SIO_BC :=  0b11000001 //  recv enable; 8bits/char
+}
+
+function waitSerial(port : C!ubyte) {
     asm {
 
   ; wait for serial port to be free
   ld	a, 0b00000000 ; write to WR1. Next byte is RR0
-  out	(SIO_AC), a
+  out	(c), a
 wait_serial_again:
-  in    a, (SIO_AC)
+  in    a, (c)
   bit   2,a
   jr    z, wait_serial_again
 
@@ -70,14 +81,13 @@ wait_serial_again:
 }
 
 
-function putChar(c : A!ubyte) {
-    asm {
-; put comment here in order to prevent swallowing whitespace
-  push af
-  call waitSerial  ; make sure we can send
-  pop  af
-  out  (SIO_AD), a
+function putChar(port : C!ubyte,  c : A!ubyte) {
+    if (port = SIO_AD) {
+        waitSerial(SIO_AC); // make sure we can send
+    } else  {
+        waitSerial(SIO_BC)
     }
+    #port := c
 }
 
 function getChar() : A!ubyte {
@@ -117,10 +127,10 @@ function readLine() {
            [buf] := c
            return
         }
-        putChar(ch)
+        putChar(SIO_AD,ch)
         if ch = '\b' {
-            putChar(' ')
-            putChar('\b')
+            putChar(SIO_AD,' ')
+            putChar(SIO_AD,'\b')
         }
         else {
             [buffer] := ch
@@ -145,6 +155,10 @@ printk_loop:
     }
 }
 
+function println(m : HL!ubyte[]) {
+    printk(m)
+    printk("\n\r")
+}
 
 function strcmp(s1 : HL!ubyte[], s2 : DE!ubyte[]) : A!bool {
     b : C!ubyte
@@ -167,13 +181,17 @@ function main() {
     // Setup the timer
     initTimer()
 
-    // Initialize the serial port
-    initSerial()
+    // Initialize the console serial port
+    initSerialCon()
 
     // Show welcome messages
-    printk("Z80 ROM Monitor v0.1\r\n")
-    printk("Written in r8\r\n")
-    printk("(C) Jan-Feb 2021 Jaap Geurts\r\n")
+    println("Z80 ROM Monitor v0.1")
+    println("Written in r8")
+    println("(C) Jan-Feb 2021 Jaap Geurts")
+
+    println("Init keyboard");
+    // init the keyboard serial port
+    initSerialKbd();
 
     loop {
         // show prompt
@@ -197,9 +215,9 @@ function main() {
                 }
         } else {
             printk("Unknown command: ")
-            putChar('"')
+            putChar(SIO_AD,'"')
             printk(buf);
-            putChar('"')
+            putChar(SIO_AD,'"')
             printk("\n\r")
         }
     }

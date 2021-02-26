@@ -223,13 +223,16 @@ string genIdentifier() {
 
 int linecount = 0;
 
+string filename;
+
 void main(string[] args) {
 
     if (args.length != 2) {
         stderr.writefln("USAGE %s <filename>", args[0]);
     }
 
-    string input = readText(args[1]);
+    filename = args[1];
+    string input = readText(filename);
 
     // Parsing at compile-time:
     ParseTree parseTree1 = Retro8(input);
@@ -601,22 +604,25 @@ void emitIfStatement(ParseTree node) {
 
     foreach (block; node.children) {
         if (block.name == "Retro8.IfBlock" || block.name == "Retro8.ElIfBlock") {
-            immutable string srctext = strip(block.input[block.begin .. block.end]).replace("\n"," ");
-            writeln(nextLabel,":\t\t; ", srctext);
+            immutable string srctext = strip(block.input[block.begin .. block.end]).replace("\n",
+                    " ");
+            writeln(nextLabel, ":\t\t; ", srctext);
             nextLabel = "else_" ~ genIdentifier();
             emitExpression(block.children[0]); // result ends up in register 'a'
             writeln("  cp   1\t\t; ", srctext);
             writeln("  jr   nz,", nextLabel);
             emitStatementList(block.children[1]);
             writeln("  jp   ", endLabel); // TODO: optimize away by checking if there is a next block
-        } else if (block.name == "Retro8.ElseBlock") {
-            immutable string srctext = "else " ~ strip(block.input[block.begin .. block.end]).replace("\n"," ");
-            writeln(nextLabel,":\t\t; ", srctext);
+        }
+        else if (block.name == "Retro8.ElseBlock") {
+            immutable string srctext = "else " ~ strip(block.input[block.begin .. block.end])
+                .replace("\n", " ");
+            writeln(nextLabel, ":\t\t; ", srctext);
             nextLabel = "else_" ~ genIdentifier();
             emitStatementList(block.children[0]);
         }
     }
-    writeln(nextLabel,":");
+    writeln(nextLabel, ":");
     writeln(endLabel, ":\t; endif");
 
 }
@@ -672,6 +678,25 @@ void emitReturnStatement(ParseTree node) {
     writeln("  ret\t\t\t; ", srctext);
 }
 
+int getLine(ParseTree node) {
+    int n = 1;
+    for (int i = 0; i < node.begin; i++) {
+        if (node.input[i] == '\n')
+            n++;
+    }
+    return n;
+}
+
+void printError(ParseTree node, string msg) {
+    stderr.writeln(filename, "(", getLine(node), ") Error: ", msg, ". Near: ",
+            node.input[node.begin .. node.end]);
+}
+
+void printWarning(ParseTree node, string msg) {
+    stderr.writeln(filename, "(", getLine(node), ") Warning: ", msg,
+            ". Near: ", node.input[node.begin .. node.end]);
+}
+
 Symbol getSymbolForIdentifier(ParseTree node) {
     string identlit = node.matches[0];
 
@@ -683,7 +708,7 @@ Symbol getSymbolForIdentifier(ParseTree node) {
     }
 
     // not in any symbol table
-    stderr.writeln("Unknown identifier near: " ~ node.input[node.begin .. node.end]);
+    printError(node, "Unknown identifier");
     exit(1);
     return null;
 }
@@ -716,7 +741,7 @@ ubyte unEscapeCharLiteral(string s) {
         case '\\':
             return '\\';
         default:
-            stderr.writeln("** ERROR ** Unsupported character literal: ", s[1]);
+            printError(ParseTree(), "Unsupported character literal: " ~ s);
             exit(1);
         }
     }
@@ -782,10 +807,12 @@ Type emitIdentifier(ParseTree node) {
         }
         break;
     case Kind.Register:
-        if (s.type == Type.Word) {
+        if (s.type == Type.Word || s.isPointer) {
             if (s.register != "bc") {
-                writeln("  ld   bc,", s.register, "\t\t; reg word");
+                writeln("  push ", s.register, "\t\t; reg word");
+                writeln("  pop  bc");
             }
+            type = Type.Word;
         }
         else {
             if (s.register[0] != 'a')
@@ -821,17 +848,19 @@ Type emitPortRead(ParseTree node) {
 
 Type emitRegister(ParseTree node) {
     string register = node.matches[0].toLower();
-    if (register[0] != 'a')
-        writeln("  ld   a,", register, "\t\t; emitRegister ", __LINE__);
-    switch (register.toUpper()) {
-    case "AF":
-    case "BC":
-    case "DE":
-    case "HL":
-    case "IX":
-    case "IY":
+    switch (register) {
+    case "af":
+    case "bc":
+    case "de":
+    case "hl":
+    case "ix":
+    case "iy":
+        if (register != "bc")
+            writeln("  ld   bc,", register, "\t\t; emitRegister ", __LINE__);
         return Type.Word;
     default:
+        if (register != "a")
+            writeln("  ld   a,", register, "\t\t; emitRegister ", __LINE__);
         return Type.Byte;
     }
 }
@@ -954,7 +983,8 @@ Type emitExpression(ParseTree node) {
             writeln("  ld   a,(hl)");
             break;
         default:
-            stderr.writeln(" *** ERROR ***", __LINE__);
+            printError(node, "Internal compiler error at line " ~ to!string(__LINE__));
+            exit(1);
         }
         break;
     case "Retro8.Factor":
@@ -971,7 +1001,8 @@ Type emitExpression(ParseTree node) {
     default:
         // TODO: consider the type
         if (node.children.length > 1)
-            stderr.writeln("** WARNING ** more than one child ", __LINE__);
+            printWarning(node,
+                    "Internal compiler error. More than one child at " ~ to!string(__LINE__));
         foreach (ParseTree child; node.children) {
             return emitExpression(child);
         }
@@ -980,29 +1011,68 @@ Type emitExpression(ParseTree node) {
     return type;
 }
 
+void saveRegisters(Symbol s) {
+    foreach (arg; s.funcargs) {
+        string reg;
+        if (arg.register == "a")
+            reg = "af";
+        else if (arg.register == "b" || arg.register == "c")
+            reg = "bc";
+        else if (arg.register == "d" || arg.register == "e")
+            reg = "de";
+        else if (arg.register == "h" || arg.register == "l")
+            reg = "hl";
+        else
+            reg = arg.register;
+        writeln("  push ", reg);
+    }
+}
+
+void restoreRegisters(Symbol s) {
+    foreach (arg; s.funcargs) {
+        string reg;
+        if (arg.register == "a")
+            reg = "af";
+        else if (arg.register == "b" || arg.register == "c")
+            reg = "bc";
+        else if (arg.register == "d" || arg.register == "e")
+            reg = "de";
+        else if (arg.register == "h" || arg.register == "l")
+            reg = "hl";
+        else
+            reg = arg.register;
+        writeln("  pop  ", reg);
+    }
+}
+
 Type emitFunctionCall(ParseTree node) {
     //foreach argument in the list
     string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
     Symbol s = getSymbolForIdentifier(node.children[0]);
     // get the symbol for this function call
     if (s.kind != Kind.Function) {
-        stderr.writeln("** ERROR ** symbol ", node.children[0].matches[0],
-                " is not a function. ", __LINE__);
+        printError(node, "Symbol " ~ node.children[0].matches[0] ~ " exists but is not a function");
         exit(1);
     }
+    // save register state
+    // saveRegisters(s);
     if (node.children.length > 1) {
+        if (node.children[1].children.length != s.funcargs.length)
+            printError(node, "Expected " ~ to!string(
+                    s.funcargs.length) ~ " but found " ~ to!string(
+                    node.children[1].children.length) ~ " arguments");
         foreach (i, arg; node.children[1].children) {
             Param p = s.funcargs[i];
             if (p.register == "bc" || p.register == "a")
                 continue; // do A or BC register last
             Type type = emitExpression(arg);
             // TODO: check signature and put the arguments in the correct registers
-            if (type == Type.Bool || type == Type.Byte) {
-                writeln("  ld   ", p.register, ",a");
+            if (type == Type.Word || s.isPointer) {
+                writeln("  push bc\t\t; ld ", p.register, ",bc\t\t; load register");
+                writeln("  pop  ", p.register);
             }
             else {
-                writeln("  push bc\t\t; ld ", p.register, ",bc");
-                writeln("  pop  ", p.register);
+                writeln("  ld   ", p.register, ",a\t\t; load register");
             }
         }
         foreach (i, arg; node.children[1].children) {
@@ -1016,6 +1086,8 @@ Type emitFunctionCall(ParseTree node) {
     string instruction = "  call " ~ identifier;
     string tabs = generate!(() => '\t').takeExactly((23 - instruction.length) / 8 + 1).array;
     writeln(instruction, tabs, "; ", srctext);
+    // restore register state
+    // restoreRegisters(s);
     return s.type;
 }
 
@@ -1116,8 +1188,7 @@ void emitAssignmentStmt(ParseTree node) {
         // Indirect access (load mem location)
         Symbol s = getSymbolForIdentifier(node.children[0]);
         if (!s.isPointer)
-            stderr.writeln(" ** WARNING **  Assignment makes pointer from integer without a cast: ",
-                    srctext);
+            printWarning(node, "Assignment makes pointer from integer without a cast: ");
 
         // check is there is an offset
         string offset = null;
@@ -1135,23 +1206,23 @@ void emitAssignmentStmt(ParseTree node) {
         // load value in register ix
         if (rhstype == Type.Byte) {
             if (offset != null) {
-                writeln("  ld   ix,", dest, "\t\t; A-", srctext);
+                writeln("  ld   ix,", dest, "\t\t; ", srctext);
                 writeln("  ld   (ix+", offset, "),a");
             }
             else {
-                writeln("  ld   (", dest, "),a\t\t; B-", srctext);
+                writeln("  ld   (", dest, "),a\t\t; ", srctext);
             }
         }
         else {
             // can't use offsets and must use arithmetic
             if (offset != null) {
-                writeln("  ld   ix,", dest, "\t\t; C-", srctext);
+                writeln("  ld   ix,", dest, "\t\t; ", srctext);
                 writeln("  ld   de,", offset);
                 writeln("  add  ix,de");
                 writeln("  ld   (ix)", offset, ",bc");
             }
             else {
-                writeln("  ld   (", dest, "),bc\t\t; D1-", srctext);
+                writeln("  ld   (", dest, "),bc\t\t; ", srctext);
             }
         }
 
@@ -1160,11 +1231,17 @@ void emitAssignmentStmt(ParseTree node) {
         node = node.children[0].children[0];
         Symbol s = getSymbolForIdentifier(node);
         if (s.kind == Kind.Constant) {
-            writeln("  out  (", s.name, "),a\t\t; D2-", srctext);
+            writeln("  out  (", s.name, "),a\t\t; ", srctext);
         }
         else if (s.kind == Kind.Variable) {
-            writeln("  ld   a,", s.value, "\t\t; E-", srctext);
-            writeln("  out  (", s.value, "),a");
+            writeln("  ld   hl,", s.name, "\t\t; ", srctext);
+            writeln("  ld   c,(hl)");
+            writeln("  out  (c),a");
+        }
+        else if (s.kind == Kind.Register) {
+            if (s.register != "c")
+                writeln("  ld   c,", s.register);
+            writeln("  out  (c),a\t\t; ", srctext);
         }
     }
     else {
