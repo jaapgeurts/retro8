@@ -22,22 +22,22 @@ Retro8:
 
     Sequence     <  ConstList? VarList? ExternList? Function*
 
-    ConstList    <  "constants" '{' Comment* ConstDecl* '}' Comment*
-    ConstDecl    <  Identifier '=' Literal ';'?  Comment*
+    ConstList    <  "constants" '{' ConstDecl* '}' 
+    ConstDecl    <  Identifier '=' Literal ';'?  
 
-    VarList      <  "variables" Comment* '{'  Comment* VarDecl* '}' Comment*
-    VarDecl      <  SimpleDecl Comment* ';'?  Comment*
+    VarList      <  "variables" '{' VarDecl* '}' 
+    VarDecl      <  SimpleDecl ';'?  
     #              / arraydecl ';'?
 
-    ExternList   < "extern" Comment* '{' Comment* Prototype* '}' Comment*
+    ExternList   < "extern"  '{'  Prototype* '}' 
 
     SimpleDecl   <  Identifier ':' Type TypeSuffix? (':=' Literal)?
-    Type         <-  "ubyte"
+    Type         <  "ubyte"
                   / "byte"
                   / "uword"
                   / "word"
                   / "bool"
-    TypeSuffix < '[' (DecLit/HexLit)? ']'
+    TypeSuffix   < '[' (DecLit/HexLit)? ']'
 
     #RegType      < Register '!' Type # add this
 
@@ -50,8 +50,8 @@ Retro8:
     CharLit      <~ :quote (!quote ((backslash [bnrt]) / .)) :quote
     StringLit    <- :doublequote ~((!(doublequote / eol)  .)*) :doublequote
 
-    Function     <  "function" Comment* Signature Comment* StatementBlock Comment*
-    Prototype    <  "function" Comment* ProtoSignature Comment* 
+    Function     <  "function"  Signature  StatementBlock 
+    Prototype    <  "function"  ProtoSignature  
 
     Signature    <  Identifier Parameters (':' Register '!' Type )?
     Parameters   < '(' ParamList? ')'
@@ -61,10 +61,10 @@ Retro8:
     ProtoParameters   < '(' ParamTypeList? ')'
     ParamTypeList     < Register '!' Type TypeSuffix? (',' ParamTypeList )?
 
-    LocalVarDecl   <  Identifier ':' Register '!' Type TypeSuffix?
+    LocalVarDecl     <  Identifier ':' Register '!' Type TypeSuffix?
 
-    StatementBlock < '{' Comment* LocalVarDecl* Comment* StatementList* '}' 
-    StatementList  < Statement Comment* ';'? Comment* (StatementList)*
+    StatementBlock   < '{' LocalVarDecl*  StatementList* '}' 
+    StatementList    < Statement  ';'?  (StatementList)*
 
     Statement       < UnaryExpression
                      / AssignmentStmt 
@@ -86,7 +86,10 @@ Retro8:
     RepeatUntilStmt  < "repeat" StatementBlock "until" Expression
 
  
-    IfStmt           < "if" Expression StatementBlock ("else" StatementBlock)?
+    IfStmt           < IfBlock ElIfBlock* ElseBlock?
+    IfBlock          < "if" Expression StatementBlock 
+    ElIfBlock        < "elif" Expression StatementBlock
+    ElseBlock        < "else" StatementBlock
     WhileStmt        < "while" Expression StatementBlock
 
     UnaryExpression  < Identifier PostfixOp
@@ -104,7 +107,9 @@ Retro8:
                     / '(' Expression ')'
                     / "null"
 
-    IndirectAccess   < '[' (Identifier / Literal) ']'
+    IndirectAccess   < '[' (Identifier / Literal) RefAdd? ']'
+
+    RefAdd          < ('+' Literal)
 
     Port             < '#' (Identifier /Literal)
     
@@ -127,7 +132,9 @@ Retro8:
     LineComment  <~ "//" ( !eol . )* eol
     BlockComment <~ "/*" (!"*/" .)* "*/"
 
-    WhiteSpace     <- Eol / ' ' / '\t'
+    Spacing      <: ( WhiteSpace / Comment )*
+
+    WhiteSpace   <- Eol / ' ' / '\t' 
 
     Eol          <- "\r\n" / '\n' / '\r'
     Eof          <- !.
@@ -169,7 +176,7 @@ enum Type {
 struct Param {
     string register; // should use enum here
     Type type;
-    bool isIndirection;
+    bool isPointer;
 }
 
 class Symbol {
@@ -177,7 +184,7 @@ class Symbol {
     string name;
     Type type;
     bool isSigned;
-    bool isIndirection;
+    bool isPointer;
     bool isString; // for internal use only
     string value;
     string code;
@@ -186,13 +193,13 @@ class Symbol {
     int count = 1;
 
     public this(Kind kind, string name, Type type, string register, bool signed,
-            bool indirection, bool isString, string value, string code, int count) {
+            bool isPointer, bool isString, string value, string code, int count) {
         this.kind = kind;
         this.name = name;
         this.type = type;
         this.register = register;
         isSigned = signed;
-        isIndirection = indirection;
+        this.isPointer = isPointer;
         this.isString = isString;
         this.value = value;
         this.register = register;
@@ -213,6 +220,8 @@ string genIdentifier() {
         .array;
     return rnd.idup;
 }
+
+int linecount = 0;
 
 void main(string[] args) {
 
@@ -299,7 +308,7 @@ unittest {
     assert(str == "1,10", str);
     assert(toAsmStr(r"\n\r") == "2,10,13");
     str = toAsmStr(r"a\n");
-    assert(str == `2,"a",10`,str);
+    assert(str == `2,"a",10`, str);
     assert(toAsmStr(r"ab\n") == `3,"ab",10`);
     assert(toAsmStr(r"abc\n") == `4,"abc",10`);
     assert(toAsmStr(r"\na") == `2,10,"a"`);
@@ -311,9 +320,18 @@ unittest {
 }
 
 void emitData() {
-    writeln("; variables and strings");
-    foreach (v; symboltable.values.sort!((a, b) => a.isString == b.isString
-            ? false : (a.isString ? false : true))) {
+    writeln("; Constant strings");
+    foreach (v; symboltable.values) {
+        string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
+        if (v.kind == Kind.Constant) {
+            if (v.type == Type.Byte && v.isString) {
+                writeln(v.name, ":", tabs, "ascii ", toAsmStr(v.value));
+            }
+        }
+    }
+    writeln("  org 0x8000");
+    writeln("; variables");
+    foreach (v; symboltable.values) {
         // todo check if there is an array.
         string tabs = generate!(() => '\t').takeExactly((24 - v.name.length) / 8 + 1).array;
         if (v.kind == Kind.Variable) {
@@ -342,12 +360,8 @@ void emitData() {
                 break;
             }
         }
-        else if (v.kind == Kind.Constant) {
-            if (v.type == Type.Byte && v.isString) {
-                writeln(v.name, ":", tabs, "ascii ", toAsmStr(v.value));
-            }
-        }
     }
+
 }
 
 Type textToType(string typename) {
@@ -370,23 +384,28 @@ bool isTypeSigned(string typename) {
 }
 
 void emitSimpleDecl(ParseTree node) {
-    string srctext = strip(node.input[node.begin .. node.end]);
-    immutable Type type = textToType(node.matches[2]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
+    Type type = textToType(node.matches[2]);
     bool isSigned = isTypeSigned(node.matches[2]);
     string identifier = node.matches[0];
-    bool indirection = node.children.length >= 3 && node.children[2].name == "Retro8.TypeSuffix";
+    bool ispointer = false;
     int count = 0;
     string value = "";
-    if (node.children.length > 2 && node.children[2].children.length > 0) {
-        if (node.children[2].name == "Retro8.TypeSuffix")
-            count = to!int(node.children[2].children[0].matches[0]);
+    if (node.children.length > 2) {
+        if (node.children[2].name == "Retro8.TypeSuffix") {
+            ispointer = true;
+            if (node.children[2].children.length > 0) {
+                // fixed size array
+                count = to!int(node.children[2].children[0].matches[0]);
+            }
+        }
         else if (node.children[2].name == "Retro8.Literal")
             value = node.children[2].children[0].matches[0];
     }
 
     // add name to symbol tables
     Symbol symbol = new Symbol(Kind.Variable, "v_" ~ identifier, type, "",
-            isSigned, indirection, false, value, srctext, count);
+            isSigned, ispointer, false, value, srctext, count);
     if (node.children.length > 3)
         symbol.value = node.matches[4];
     symboltable[identifier] = symbol;
@@ -400,10 +419,10 @@ void recordPrototypeParams(ParseTree node, Symbol s) {
             recordPrototypeParams(node.children[0], s);
     }
     else if (node.name == "Retro8.ParamTypeList") {
-        bool indirection = node.children.length >= 3 && node.children[2].name == "Retro8.TypeSuffix";
+        bool ispointer = node.children.length >= 3 && node.children[2].name == "Retro8.TypeSuffix";
         Param param = {
             node.children[0].matches[0].toLower(),
-                textToType(node.children[1].matches[0]), indirection
+                textToType(node.children[1].matches[0]), ispointer
         };
         s.funcargs ~= param;
         if (node.children.length >= 3) {
@@ -426,7 +445,7 @@ void recordPrototype(ParseTree node) {
 }
 
 void recordConstDecl(ParseTree node) {
-    string srctext = strip(node.input[node.begin .. node.end]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
     immutable string identifier = node.children[0].matches[0];
     node = node.children[1];
     immutable string literaltype = node.children[0].name;
@@ -518,7 +537,7 @@ void emitStatement(ParseTree node) {
 }
 
 void emitUnaryExprStatement(ParseTree node) {
-    string srctext = strip(node.input[node.begin .. node.end]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
     bool indirect = node.children[0].name == "Retro8.IndirectAccess";
 
     if (indirect)
@@ -534,26 +553,24 @@ void emitUnaryExprStatement(ParseTree node) {
         writeln(op, s.register, "\t\t; ", srctext);
     }
     else if (s.kind == Kind.Variable) {
-        if (indirect)
-            writeln(op, "(", s.name, ")\t\t; ", srctext);
-        else
-            stderr.writeln("** ERROR ** Can't increment global variable addresses");
+        writeln(op, "(", s.name, ")\t\t; ", srctext);
     }
 }
 
 void processLocalDecl(ParseTree node) {
-    string srctext = strip(node.input[node.begin .. node.end]);
-    immutable Type type = textToType(node.matches[2]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
+    Type type = textToType(node.children[2].matches[0]);
     bool isSigned = isTypeSigned(node.matches[2]);
     string identifier = node.children[0].matches[0];
-    bool indirection = node.children.length > 3 && node.children[3].name == "Retro8.TypeSuffix";
+    bool ispointer = node.children.length > 3 && node.children[3].name == "Retro8.TypeSuffix";
     int count = 0;
     string value = "";
 
     string register = node.children[1].matches[0].toLower();
     // add name to symbol tables
     Symbol symbol = new Symbol(Kind.Register, identifier, type, register,
-            isSigned, indirection, false, value, srctext, count);
+            isSigned, ispointer, false, value, srctext, count);
+    //stderr.writeln("Adding local: ", symbol.tupleof);
 
     localsymbolstack.back.symbols[identifier] = symbol;
 
@@ -577,27 +594,29 @@ void emitStatementBlock(ParseTree node) {
 }
 
 void emitIfStatement(ParseTree node) {
-    ParseTree child = node.children[0];
+    ParseTree ifblock = node.children[0];
+
     immutable string endLabel = "endif_" ~ genIdentifier();
-    immutable string elseLabel = "else_" ~ genIdentifier();
-    immutable string srctxt = "if " ~ strip(child.input[child.begin .. child.end]);
-    writeln("\t\t\t; ", srctxt);
-    emitExpression(child); // result ends up in register 'a'
-    writeln("  cp   1\t\t; " ~ srctxt);
-    if (node.children.length > 2)
-        writeln("  jr   nz," ~ elseLabel);
-    else
-        writeln("  jr   nz," ~ endLabel);
-    if (node.children[1].children.length > 0)
-        emitStatementList(node.children[1].children[0]);
-    if (node.children.length > 2) {
-        // jump over else
-        writeln("  jr   ", endLabel);
-        writeln(elseLabel, ":\t\t; else");
-        // we have an else block
-        if (node.children[2].children.length > 0)
-            emitStatementList(node.children[2].children[0]);
+    string nextLabel = "else_" ~ genIdentifier();
+
+    foreach (block; node.children) {
+        if (block.name == "Retro8.IfBlock" || block.name == "Retro8.ElIfBlock") {
+            immutable string srctext = strip(block.input[block.begin .. block.end]).replace("\n"," ");
+            writeln(nextLabel,":\t\t; ", srctext);
+            nextLabel = "else_" ~ genIdentifier();
+            emitExpression(block.children[0]); // result ends up in register 'a'
+            writeln("  cp   1\t\t; ", srctext);
+            writeln("  jr   nz,", nextLabel);
+            emitStatementList(block.children[1]);
+            writeln("  jp   ", endLabel); // TODO: optimize away by checking if there is a next block
+        } else if (block.name == "Retro8.ElseBlock") {
+            immutable string srctext = "else " ~ strip(block.input[block.begin .. block.end]).replace("\n"," ");
+            writeln(nextLabel,":\t\t; ", srctext);
+            nextLabel = "else_" ~ genIdentifier();
+            emitStatementList(block.children[0]);
+        }
     }
+    writeln(nextLabel,":");
     writeln(endLabel, ":\t; endif");
 
 }
@@ -610,7 +629,7 @@ void emitWhileStatement(ParseTree node) {
 
     ParseTree child = node.children[0];
 
-    string srctext = strip(child.input[child.begin .. child.end]);
+    string srctext = strip(child.input[child.begin .. child.end]).replace("\n", " ");
 
     immutable string labelEnd = "wend_" ~ genIdentifier();
     immutable string labelLoop = "while_" ~ genIdentifier();
@@ -632,7 +651,7 @@ void emitRepeatUntilStatement(ParseTree node) {
     emitExpression(child); // result ends up in register 'a'
     writeln("  cp   1\t\t; ");
 
-    string srctext = strip(child.input[child.begin .. child.end]);
+    string srctext = strip(child.input[child.begin .. child.end]).replace("\n", " ");
 
     writeln("  jr  nz,", labelLoop, "\t\t; until ", srctext);
 }
@@ -646,7 +665,7 @@ void emitLoopStatement(ParseTree node) {
 }
 
 void emitReturnStatement(ParseTree node) {
-    string srctext = strip(node.input[node.begin .. node.end]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
 
     if (node.children.length > 0)
         emitExpression(node.children[0]);
@@ -667,6 +686,20 @@ Symbol getSymbolForIdentifier(ParseTree node) {
     stderr.writeln("Unknown identifier near: " ~ node.input[node.begin .. node.end]);
     exit(1);
     return null;
+}
+
+Type getTypeForRegister(string register) {
+    switch (register.toLower()) {
+    case "af":
+    case "bc":
+    case "de":
+    case "hl":
+    case "ix":
+    case "iy":
+        return Type.Word;
+    default:
+        return Type.Byte;
+    }
 }
 
 ubyte unEscapeCharLiteral(string s) {
@@ -730,23 +763,34 @@ Type emitIdentifier(ParseTree node) {
 
     switch (s.kind) {
     case Kind.Constant:
-        if (s.isIndirection)
+        if (s.type == Type.Word)
             writeln("  ld   bc,", s.name,
-                    "\t; constant indirection ", __LINE__);
+                    "\t\t; const word", __LINE__);
         else
-            writeln("  ld   a,", s.name, "\t\t; constant no indirection ", __LINE__);
+            writeln("  ld   a,", s.name, "\t\t; const byte", __LINE__);
         break;
     case Kind.Variable:
-        if (s.isIndirection) {
-            writeln("  ld   bc,", s.name, "\t\t; variable indirection ", __LINE__);
+        if (s.type == Type.Word || s.isPointer) {
+            if (s.name != "bc") {
+                writeln("  ld   bc,", s.name, "\t\t; var word ", __LINE__);
+            }
             type = Type.Word;
         }
-        else
-            writeln("  ld   a,(", s.name, ")\t\t; variable no indirection ", __LINE__);
+        else {
+            if (s.name != "a")
+                writeln("  ld   a,(", s.name, ")\t; var byte ", __LINE__);
+        }
         break;
     case Kind.Register:
-        if (s.register[0] != 'a')
-            writeln("  ld   a,", s.register, "\t\t; register");
+        if (s.type == Type.Word) {
+            if (s.register != "bc") {
+                writeln("  ld   bc,", s.register, "\t\t; reg word");
+            }
+        }
+        else {
+            if (s.register[0] != 'a')
+                writeln("  ld   a,", s.register, "\t\t; reg byte");
+        }
         break;
     default:
         stderr.writeln("Internal compiler error. Unknown symbol");
@@ -759,7 +803,7 @@ Type emitIdentifier(ParseTree node) {
 
 Type emitPortRead(ParseTree node) {
     // resolve the symbol if it's an identifier
-    string srctext = strip(node.input[node.begin .. node.end]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
     string port;
     if (node.children[0].name == "Retro8.Identifier") {
         Symbol s = getSymbolForIdentifier(node.children[0]);
@@ -851,27 +895,27 @@ Type emitEvalOperation(ParseTree node) {
         writeln("  cp   b");
         // assume false
         writeln("  ld   a,0\t\t; false");
-        string lblEnd = "false_" ~ genIdentifier();
+        string lblEnd = "cpend_" ~ genIdentifier();
         switch (node.children[1].matches[0]) {
         case "=":
-            writeln("  jr   nz," ~ lblEnd);
+            writeln("  jr   nz,", lblEnd, ";", __LINE__);
             break;
         case "!=":
-            writeln("  jr   z," ~ lblEnd);
+            writeln("  jr   z,", lblEnd, ";", __LINE__);
             break;
         case "<":
-            writeln("  jr   nc," ~ lblEnd);
+            writeln("  jr   nc,", lblEnd, ";", __LINE__);
+            writeln("  jr   z,", lblEnd, ";", __LINE__);
             break;
         case ">":
-            writeln("  jr   c," ~ lblEnd);
+            writeln("  jr   c,", lblEnd, ";", __LINE__);
             break;
         case "<=":
-            writeln("  jr   c," ~ lblEnd);
-            writeln("  jr   nz," ~ lblEnd);
+            writeln("  jr   nc,", lblEnd, ";", __LINE__);
             break;
         case ">=":
-            writeln("  jr   nc," ~ lblEnd);
-            writeln("  jr   nz," ~ lblEnd);
+            writeln("  jr   c,", lblEnd, ";", __LINE__);
+            writeln("  jr   z,", lblEnd, ";", __LINE__);
             break;
         default:
             break;
@@ -906,8 +950,6 @@ Type emitExpression(ParseTree node) {
             writeln("  ld   a,(", s.register, ")\t\t; register ", __LINE__);
             break;
         case Kind.Variable:
-            if (!s.isIndirection)
-                stderr.writeln("WARNING: using byte as pointer ", __LINE__);
             writeln("  ld   hl,(", s.name, ")\t\tvariable ", __LINE__);
             writeln("  ld   a,(hl)");
             break;
@@ -940,6 +982,7 @@ Type emitExpression(ParseTree node) {
 
 Type emitFunctionCall(ParseTree node) {
     //foreach argument in the list
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
     Symbol s = getSymbolForIdentifier(node.children[0]);
     // get the symbol for this function call
     if (s.kind != Kind.Function) {
@@ -972,26 +1015,26 @@ Type emitFunctionCall(ParseTree node) {
     string identifier = node.children[0].matches[0];
     string instruction = "  call " ~ identifier;
     string tabs = generate!(() => '\t').takeExactly((23 - instruction.length) / 8 + 1).array;
-    writeln(instruction, tabs, "; " ~ strip(node.input[node.begin .. node.end]));
+    writeln(instruction, tabs, "; ", srctext);
     return s.type;
 }
 
 void processParamList(ParseTree node, Symbol s) {
     string register = node.children[1].matches[0].toLower();
     Type type = textToType(node.children[2].matches[0]);
-    bool isIndirection = false;
+    bool ispointer = false;
     if (node.children.length > 3)
-        isIndirection = node.children[3].name == "Retro8.TypeSuffix";
+        ispointer = node.children[3].name == "Retro8.TypeSuffix";
     string identifier = node.children[0].matches[0];
     bool isSigned = isTypeSigned(node.matches[2]);
 
     Symbol ls = new Symbol(Kind.Register, identifier, type, register, isSigned,
-            isIndirection, false, "", "", 0);
+            ispointer, false, "", "", 0);
 
     localsymbolstack.back.symbols[identifier] = ls;
-    Param p = {register, type, isIndirection};
+    Param p = {register, type, ispointer};
     s.funcargs ~= p;
-    if (isIndirection) {
+    if (ispointer) {
         if (node.children.length > 4) {
             processParamList(node.children[4], s);
         }
@@ -1022,6 +1065,7 @@ void emitFunctionSignature(ParseTree node) {
         processParamList(node.children[1].children[0], s);
     }
     symboltable[identifier] = s;
+    writeln();
     writeln(node.matches[0] ~ ":\t\t\t; " ~ strip(node.input[node.begin .. node.end]));
 }
 
@@ -1050,57 +1094,104 @@ void emitFunctionEnd(ParseTree node) {
         localsymbolstack.popBack();
     }
     */
+    // TODO: check if the prior to last node is a return statement; then don't do this one.
     writeln("  ret");
     localsymbolstack.popBack();
 }
 
 void emitAssignmentStmt(ParseTree node) {
 
-    string srctext = strip(node.input[node.begin .. node.end]);
+    string srctext = strip(node.input[node.begin .. node.end]).replace("\n", " ");
 
-    Type type = emitExpression(node.children[1]);
-    bool indirect = false;
-    ParseTree identNode;
+    // first emit the expression.
+
+    Type rhstype = emitExpression(node.children[1]);
+
+    // Result in BC or in A
+
+    // Now figure out destination.
+    string dest;
     if (node.children[0].name == "Retro8.IndirectAccess") {
-        indirect = true;
-        identNode = node.children[0].children[0];
-    }
-    else if (node.children[0].name == "Retro8.Port") {
-        identNode = node.children[0].children[0];
-        Symbol s = getSymbolForIdentifier(identNode);
-        if (s.kind == Kind.Constant) {
-            writeln("  out  (", s.name, "),a\t\t; ", srctext);
+        node = node.children[0];
+        // Indirect access (load mem location)
+        Symbol s = getSymbolForIdentifier(node.children[0]);
+        if (!s.isPointer)
+            stderr.writeln(" ** WARNING **  Assignment makes pointer from integer without a cast: ",
+                    srctext);
+
+        // check is there is an offset
+        string offset = null;
+        if (node.children.length > 1) {
+            offset = node.children[1].children[0].matches[0];
         }
-        else if (s.kind == Kind.Variable) {
-            writeln("  ld   a,", s.value, "\t\t; ", srctext);
-            writeln("  out  (", s.value, "),a");
-        }
-        return;
-    }
-    else {
-        identNode = node.children[0];
-    }
-    Symbol s = getSymbolForIdentifier(identNode);
-    // TODO: emit warning. access on indirect if not and vice versa
-    string srcreg = "a";
-    if (type == Type.Word)
-        srcreg = "bc";
-    string dstreg = s.name;
-    if (s.kind == Kind.Register) {
-        dstreg = s.register;
-    }
-    if (dstreg != srcreg) {
-        if (indirect) {
-            writeln("  ld   (", dstreg, "),", srcreg, "\t\t; ", srctext);
+        // is it a register
+        if (s.kind == Kind.Register) {
+            dest = s.register;
         }
         else {
-            if (dstreg == "de" || dstreg == "hl" || dstreg == "bc") {
-                writeln("  push ", srcreg, "\t\t; ld ", dstreg, ",", srcreg, "\t\t; ", srctext);
-                writeln("  pop  ", dstreg);
+            dest = s.name;
+        }
+
+        // load value in register ix
+        if (rhstype == Type.Byte) {
+            if (offset != null) {
+                writeln("  ld   ix,", dest, "\t\t; A-", srctext);
+                writeln("  ld   (ix+", offset, "),a");
             }
             else {
-                writeln("  ld   ", dstreg, ",", srcreg, "\t\t; ", srctext);
+                writeln("  ld   (", dest, "),a\t\t; B-", srctext);
             }
+        }
+        else {
+            // can't use offsets and must use arithmetic
+            if (offset != null) {
+                writeln("  ld   ix,", dest, "\t\t; C-", srctext);
+                writeln("  ld   de,", offset);
+                writeln("  add  ix,de");
+                writeln("  ld   (ix)", offset, ",bc");
+            }
+            else {
+                writeln("  ld   (", dest, "),bc\t\t; D1-", srctext);
+            }
+        }
+
+    }
+    else if (node.children[0].name == "Retro8.Port") {
+        node = node.children[0].children[0];
+        Symbol s = getSymbolForIdentifier(node);
+        if (s.kind == Kind.Constant) {
+            writeln("  out  (", s.name, "),a\t\t; D2-", srctext);
+        }
+        else if (s.kind == Kind.Variable) {
+            writeln("  ld   a,", s.value, "\t\t; E-", srctext);
+            writeln("  out  (", s.value, "),a");
+        }
+    }
+    else {
+        // Direct variable ( mem location or register)
+        Symbol lhssymbol = getSymbolForIdentifier(node.children[0]);
+        if (lhssymbol.kind == Kind.Register) {
+            dest = lhssymbol.register;
+            if (rhstype == Type.Word) {
+                writeln("  push bc\t\t; ld ", dest, ",bc\t\t; F-", srctext);
+                writeln("  pop  ", dest);
+            }
+            else {
+                if (lhssymbol.type == Type.Word || lhssymbol.isPointer) {
+                    writeln("  ld   ", dest[0], ",0\t\t; G1-", srctext);
+                    writeln("  ld   ", dest[1], ",a");
+                }
+                else {
+                    writeln("  ld   ", dest, ",a\t\t; G2-", srctext);
+                }
+            }
+        }
+        else {
+            dest = lhssymbol.name;
+            if (rhstype == Type.Word)
+                writeln("  ld   (", dest, "),bc\t\t; H-", srctext);
+            else
+                writeln("  ld   (", dest, "),a\t\t; I-", srctext);
         }
     }
 }

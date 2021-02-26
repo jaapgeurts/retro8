@@ -15,6 +15,8 @@ constants {
 
 variables {
     buf : ubyte[255]
+    bufp : ubyte[]
+    t : ubyte;
 }
 
 extern {
@@ -103,6 +105,7 @@ function readLine() {
   
     buffer := buf
     buffer++ // skip string length
+    c := 0
 
     loop {
         repeat {
@@ -121,7 +124,8 @@ function readLine() {
         }
         else {
             [buffer] := ch
-            buffer++;
+            buffer++
+            c++
         }
     }
 }
@@ -146,6 +150,7 @@ function strcmp(s1 : HL!ubyte[], s2 : DE!ubyte[]) : A!bool {
     b : C!ubyte
 
     b := [s1]
+    b++ // compare the length as well
     while b >= 0 {
         if [s1] != [s2] {
           return false
@@ -162,21 +167,40 @@ function main() {
     // Setup the timer
     initTimer()
 
-    // First initialize the serial port
+    // Initialize the serial port
     initSerial()
 
+    // Show welcome messages
     printk("Z80 ROM Monitor v0.1\r\n")
-    printk("Written in r8\r\n");
-    printk("(C) Jan-Feb 2021 Jaap Geurts\r\n");
+    printk("Written in r8\r\n")
+    printk("(C) Jan-Feb 2021 Jaap Geurts\r\n")
 
     loop {
         // show prompt
         printk("> ")
         readLine() // result in buf
-
+        printk("\n\r")
+        
         if strcmp(buf,"help") {
             printk("Commands: help, halt, load, dump, run\r\n")
+        } elif strcmp(buf,"halt") {
+            printk("System halted")
+            asm { 
+                ;test
+                halt
+                }
+        } elif strcmp(buf,"load") {
+        } elif strcmp(buf,"run") {
+                asm { 
+                    ;test
+                    call 0x8000
+                }
+        } else {
+            printk("Unknown command: ")
+            putChar('"')
+            printk(buf);
+            putChar('"')
+            printk("\n\r")
         }
     }
-
 }
