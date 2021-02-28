@@ -68,7 +68,6 @@ function initSerialKbd() {
 
 function waitSerial(port : C!ubyte) {
     asm {
-
   ; wait for serial port to be free
   ld	a, 0b00000000 ; write to WR1. Next byte is RR0
   out	(c), a
@@ -81,11 +80,21 @@ wait_serial_again:
 }
 
 
-function putChar(port : C!ubyte,  c : A!ubyte) {
+function putChar(port : C!ubyte,  c : D!ubyte) {
+    asm {
+        ; store cd
+        push  bc
+        push  de
+    }
     if (port = SIO_AD) {
         waitSerial(SIO_AC); // make sure we can send
     } else  {
         waitSerial(SIO_BC)
+    }
+    asm {
+        ; retrieve cd
+        pop  de
+        pop  bc
     }
     #port := c
 }
@@ -111,7 +120,7 @@ function readLine() {
     
     ch : H!ubyte
     c :  L!ubyte
-    buffer : DE!ubyte[]
+    buffer : IX!ubyte[]
   
     buffer := buf
     buffer++ // skip string length
@@ -120,10 +129,22 @@ function readLine() {
     loop {
         repeat {
             ch := getChar()
-        } until ch != 0
-        
+        } until ch != 0 // false
+
+/*   asm {
+            ; putchar
+            push bc
+            push de
+            ld   a,h
+            add  '0'
+            ld   d,a
+            ld   c,SIO_AD
+            call putChar
+            pop de
+            pop bc
+        }*/
+
         if (ch = '\r') {
-           
            [buf] := c
            return
         }
@@ -136,23 +157,45 @@ function readLine() {
             [buffer] := ch
             buffer++
             c++
+
         }
     }
 }
 
-function printk(m : HL!ubyte[]) {
+function printk(str : HL!ubyte[]) {
+  c : B!ubyte
+
+  c := [str]
+  str++
+  
+  while c != 0 {
+      waitSerial(SIO_AC)
+      #SIO_AD := [str]
+      str++
+      c--
+  }
+/*
     asm {
   ; print kernel message to serial (uses pascal strings)
   push hl
+  push bc
   ld   b,(hl)
 printk_loop:
+  ld   a,b
+  cp   0
+  jr   z,printk_loopend
+  ld   c, SIO_AC
   call waitSerial
   inc  hl
   ld   a, (hl)
   out  (SIO_AD), a
-  djnz printk_loop
+  dec  b
+  jr   printk_loop;
+printk_loopend:
+  pop  bc
   pop  hl
-    }
+    } 
+    */
 }
 
 function println(m : HL!ubyte[]) {
@@ -161,17 +204,16 @@ function println(m : HL!ubyte[]) {
 }
 
 function strcmp(s1 : HL!ubyte[], s2 : DE!ubyte[]) : A!bool {
-    b : C!ubyte
+    cnt : C!ubyte
 
-    b := [s1]
-    b++ // compare the length as well
-    while b >= 0 {
+    cnt := [s1]
+    while cnt >= 0 {
         if [s1] != [s2] {
           return false
         }
         s1++
         s2++
-        b--
+        cnt--
     }
     return true
 }
@@ -189,9 +231,11 @@ function main() {
     println("Written in r8")
     println("(C) Jan-Feb 2021 Jaap Geurts")
 
-    println("Init keyboard");
+    println("Init keyboard")
     // init the keyboard serial port
     initSerialKbd();
+
+  
 
     loop {
         // show prompt
@@ -213,7 +257,7 @@ function main() {
                     ;test
                     call 0x8000
                 }
-        } else {
+        } elif [buf] != 0 {
             printk("Unknown command: ")
             putChar(SIO_AD,'"')
             printk(buf);

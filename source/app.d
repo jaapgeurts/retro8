@@ -640,7 +640,9 @@ void emitWhileStatement(ParseTree node) {
     immutable string labelEnd = "wend_" ~ genIdentifier();
     immutable string labelLoop = "while_" ~ genIdentifier();
     writeln(labelLoop ~ ":\t; while ", srctext);
+    writeln("  push bc");
     emitExpression(child); // result ends up in register 'a'
+    writeln("  pop  bc");
     writeln("  cp   1");
     writeln("  jr   nz,", labelEnd);
     emitStatementList(node.children[1]);
@@ -659,7 +661,7 @@ void emitRepeatUntilStatement(ParseTree node) {
 
     string srctext = strip(child.input[child.begin .. child.end]).replace("\n", " ");
 
-    writeln("  jr  nz,", labelLoop, "\t\t; until ", srctext);
+    writeln("  jr   nz,", labelLoop, "\t\t; until ", srctext);
 }
 
 void emitLoopStatement(ParseTree node) {
@@ -921,35 +923,74 @@ Type emitEvalOperation(ParseTree node) {
         break;
     case "Retro8.RelationOp":
         type = Type.Bool;
-        writeln("  cp   b");
         // assume false
-        writeln("  ld   a,0\t\t; false");
         string lblEnd = "cpend_" ~ genIdentifier();
         switch (node.children[1].matches[0]) {
         case "=":
+            writeln("  cp   b");
+            writeln("  ld   a,0\t\t;");
             writeln("  jr   nz,", lblEnd, ";", __LINE__);
+            writeln("  ld   a,1\t\t;");
             break;
         case "!=":
+            writeln("  cp   b");
+            writeln("  ld   a,0\t\t;");
             writeln("  jr   z,", lblEnd, ";", __LINE__);
+            writeln("  ld   a,1\t\t;");
             break;
         case "<":
-            writeln("  jr   nc,", lblEnd, ";", __LINE__);
-            writeln("  jr   z,", lblEnd, ";", __LINE__);
+            string lblnoxor = genIdentifier();
+            string lbltrue = genIdentifier();
+            writeln("  sub  b");
+            writeln("  jp   po,", lblnoxor);
+            writeln("  xor  0x80");
+            writeln(lblnoxor, ":");
+            writeln("  ld   a,0\t\t;");
+            writeln("  jp   pe,", lblEnd); // greater
+            writeln(lbltrue, ":");
+            writeln("  ld   a,1\t\t;");
             break;
         case ">":
-            writeln("  jr   c,", lblEnd, ";", __LINE__);
+            string lblnoxor = genIdentifier();
+            string lbltrue = genIdentifier();
+            writeln("  sub  b");
+            writeln("  jp   po,", lblnoxor);
+            writeln("  xor  0x80");
+            writeln(lblnoxor, ":");
+            writeln("  ld   a,0\t\t;");
+            writeln("  jp   m,", lblEnd); // less
+            writeln(lbltrue, ":");
+            writeln("  ld   a,1\t\t;");
             break;
         case "<=":
-            writeln("  jr   nc,", lblEnd, ";", __LINE__);
+            string lblnoxor = genIdentifier();
+            string lbltrue = genIdentifier();
+            writeln("  sub  b");
+            writeln("  jr   z,", lbltrue); // equal
+            writeln("  jp   po,", lblnoxor);
+            writeln("  xor  0x80");
+            writeln(lblnoxor, ":");
+            writeln("  ld   a,0\t\t;");
+            writeln("  jp   pe,", lblEnd); // greater
+            writeln(lbltrue, ":");
+            writeln("  ld   a,1\t\t;");
             break;
         case ">=":
-            writeln("  jr   c,", lblEnd, ";", __LINE__);
-            writeln("  jr   z,", lblEnd, ";", __LINE__);
+            string lblnoxor = genIdentifier();
+            string lbltrue = genIdentifier();
+            writeln("  sub  b");
+            writeln("  jr   z,", lbltrue); // equal
+            writeln("  jp   po,", lblnoxor);
+            writeln("  xor  0x80");
+            writeln(lblnoxor, ":");
+            writeln("  ld   a,0\t\t;");
+            writeln("  jp   m,", lblEnd); // less
+            writeln(lbltrue, ":");
+            writeln("  ld   a,1\t\t;");
             break;
         default:
             break;
         }
-        writeln("  ld   a,1\t\t; true");
         writeln(lblEnd ~ ":");
         break;
     default:
